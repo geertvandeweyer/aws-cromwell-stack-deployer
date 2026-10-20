@@ -190,6 +190,11 @@ def load_config(path: str | Path) -> DeploymentConfig:
     if not loaded:
         raise ConfigError(f"Configuration file not found or unreadable: {config_path}")
 
+    unknown_sections = sorted(set(parser.sections()) - _REQUIRED_SECTIONS)
+    if unknown_sections:
+        unknown = ", ".join(f"[{section}]" for section in unknown_sections)
+        raise ConfigError(f"Unknown configuration section(s): {unknown}")
+
     missing_sections = sorted(_REQUIRED_SECTIONS - set(parser.sections()))
     if missing_sections:
         missing = ", ".join(f"[{section}]" for section in missing_sections)

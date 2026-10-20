@@ -66,6 +66,17 @@ class ConfigTests(TestBase):
             self.config_path.write_text(text)
             load_config(self.config_path)
 
+    def test_unknown_section_is_rejected(self) -> None:
+        """Reject unrecognized sections instead of silently ignoring inputs."""
+        self.config_path.write_text(
+            self.config_path.read_text()
+            + "\n[artifact_source]\nurl = https://example.invalid/public.zip\n"
+        )
+        with self.assertRaisesRegex(
+            ConfigError, r"Unknown configuration section.*\[artifact_source\]"
+        ):
+            load_config(self.config_path)
+
     def test_invalid_namespace_is_rejected(self) -> None:
         """Reject namespace values outside the documented pattern."""
         self.write_config({"namespace = cromwell-prod": "namespace = Cromwell_prod"})
