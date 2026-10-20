@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cromwell-cdk"
+version = "0.1.0"
+description = "AWS CDK platform for Cromwell workflow execution"
+requires-python = ">=3.12"
+dependencies = [
+  "aws-cdk-lib>=2.273.0,<2.274.0",
+  "constructs>=10.4.2,<11.0.0",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3,<9.0",
+  "hypothesis>=6.130,<7.0",
+  "ruff>=0.11,<0.12",
+  "cdk-nag>=2.37,<3.0",
+  "pre-commit>=4.2,<5.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<9.0",
+  "hypothesis>=6.130,<7.0",
+  "ruff>=0.11,<0.12",
+  "cdk-nag>=2.37,<3.0",
+  "pre-commit>=4.2,<5.0",
+]
+
+[project.scripts]
+deploy-cromwell = "cromwell_cdk.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["cromwell_cdk*"]
+
+[tool.ruff]
+line-length = 88
