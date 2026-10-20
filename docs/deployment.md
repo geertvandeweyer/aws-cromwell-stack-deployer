@@ -2,9 +2,13 @@
 
 ## Current implementation status
 
-The repository contains the Python CDK entry point and empty application shell.
-The deployment CLI, platform stack, and AWS resources are not implemented yet;
-commands below validate the CDK shell only and do not deploy infrastructure.
+The repository contains the Python CDK entry point and empty application shell,
+the `deploy-cromwell` CLI, and the shared configuration loader. The platform
+stack and AWS resources are not implemented yet. The CLI defaults to the safe
+`synth` action, but CDK reports an empty application as a failed synth (exit 5).
+Explicit `--action deploy` and `--action destroy` run those operations; do not use them
+until the platform stack is implemented. `--dry-run` always runs synth, even if
+a different action was requested.
 
 ## Prerequisites
 
@@ -24,12 +28,29 @@ development dependencies from `pyproject.toml` (using `uv sync --extra dev` or
 dependency graph for repeatable `uv` installs. Install the repository's Git hooks
 with `pre-commit install`.
 
-## Synthesize the current empty CDK app
+## CLI validation and synthesis
 
-Run `cdk synth` from the repository root. This invokes `python app.py`; at this
-stage it synthesizes an empty CDK app, not a Cromwell platform stack. The
-`deploy-cromwell` CLI and its dry-run behavior will be documented here when
-implemented and validated.
+Install the project, create a local `configuration.ini` from
+`configuration.example.ini`, and supply the required AWS region and root bucket:
+
+```text
+deploy-cromwell --region eu-west-1 --cromwell-root-bucket my-cromwell-root \
+  --config configuration.ini --dry-run
+```
+
+`--dry-run` validates configuration, runs CDK synth without context lookups, and
+does not invoke deploy/destroy. AWS-aware checks are reported as not implemented
+yet; this command cannot succeed until at least one CDK stack is implemented.
+The supported actions are `synth` (default), `deploy`, and `destroy`; deploy and destroy remain
+unavailable for production use until infrastructure stacks exist. A `DESTROY`
+removal policy requires `--confirm-destroy-data` for any action.
+
+Exit codes: `0` success, `2` invalid arguments or missing destructive
+confirmation, `3` invalid or missing configuration, `4` missing CDK
+prerequisite, and `5` CDK operation failure. Diagnostics are written to stderr
+and name the configuration key when applicable. See
+[configuration.md](configuration.md) for the supported keys and deterministic
+validation rules.
 
 ## Cost and teardown
 
