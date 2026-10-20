@@ -31,7 +31,7 @@ dev = [
 ]
 
 [project.scripts]
-deploy-cromwell = "cromwell_cdk.cli:main"
+deploy-cromwell = "cromwell_cdk.cli:entrypoint"
 
 [tool.setuptools.packages.find]
 include = ["cromwell_cdk*"]
