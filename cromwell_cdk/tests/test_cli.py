@@ -203,6 +203,39 @@ class CliTests(TestBase):
 
     @patch("cromwell_cdk.cli.subprocess.run")
     @patch("cromwell_cdk.cli.shutil.which", return_value="/usr/bin/cdk")
+    def test_missing_vpc_prerequisite_reported_by_cdk_maps_to_exit_four(
+        self, _which: Mock, run: Mock
+    ) -> None:
+        """Map synthesis-time VPC/subnet prerequisite errors to exit code 4."""
+        run.return_value = Mock(
+            returncode=1,
+            stderr="PrereqError: Configured private subnet(s) not found in VPC",
+            stdout="",
+        )
+        args = build_parser().parse_args(self.arguments())
+        with patch("sys.stderr") as stderr:
+            self.assertEqual(execute(args), EXIT_PREREQUISITE)
+        self.assertTrue(stderr.write.called)
+
+    @patch("cromwell_cdk.cli.subprocess.run")
+    @patch("cromwell_cdk.cli.shutil.which", return_value="/usr/bin/cdk")
+    def test_uncached_dry_run_vpc_lookup_maps_to_exit_four(
+        self, _which: Mock, run: Mock
+    ) -> None:
+        """Explain that dry-run cannot perform uncached AWS context lookups."""
+        run.return_value = Mock(
+            returncode=1,
+            stderr="Cannot retrieve value from context provider vpc-provider",
+            stdout="",
+        )
+        args = build_parser().parse_args(self.arguments("--dry-run"))
+        with patch("sys.stderr") as stderr:
+            self.assertEqual(execute(args), EXIT_PREREQUISITE)
+        diagnostic = "".join(call.args[0] for call in stderr.write.call_args_list)
+        self.assertIn("dry-run skipped AWS subnet/AZ checks", diagnostic)
+
+    @patch("cromwell_cdk.cli.subprocess.run")
+    @patch("cromwell_cdk.cli.shutil.which", return_value="/usr/bin/cdk")
     def test_cdk_error_diagnostic_is_one_line(self, _which: Mock, run: Mock) -> None:
         """Collapse CDK multiline errors to the required one-line diagnostic."""
         run.return_value = Mock(

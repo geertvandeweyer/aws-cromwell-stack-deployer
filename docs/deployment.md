@@ -2,13 +2,12 @@
 
 ## Current implementation status
 
-The repository contains the Python CDK entry point and empty application shell,
-the `deploy-cromwell` CLI, and the shared configuration loader. The platform
-stack and AWS resources are not implemented yet. The CLI defaults to the safe
-`synth` action, but CDK reports an empty application as a failed synth (exit 5).
-Explicit `--action deploy` and `--action destroy` run those operations; do not use them
-until the platform stack is implemented. `--dry-run` always runs synth, even if
-a different action was requested.
+The repository contains the Python CDK entry point, the `deploy-cromwell` CLI,
+the shared configuration loader, and the existing-VPC network foundation. The
+CLI defaults to the safe `synth` action. Explicit `--action deploy` and
+`--action destroy` run those operations; do not use them until the platform
+resources are implemented. `--dry-run` always runs synth, even if a different
+action was requested.
 
 ## Prerequisites
 
@@ -38,11 +37,16 @@ deploy-cromwell --region eu-west-1 --cromwell-root-bucket my-cromwell-root \
   --config configuration.ini --dry-run
 ```
 
-`--dry-run` validates configuration, runs CDK synth without context lookups, and
-does not invoke deploy/destroy. AWS-aware checks are reported as not implemented
-yet; this command cannot succeed until at least one CDK stack is implemented.
-The supported actions are `synth` (default), `deploy`, and `destroy`; deploy and destroy remain
-unavailable for production use until infrastructure stacks exist. A `DESTROY`
+`--dry-run` validates local configuration, runs CDK synth without context
+lookups, and does not invoke deploy/destroy. The subnet/AZ lookup is therefore
+skipped when the VPC is not present in CDK context; synth reports the missing
+lookup prerequisite instead of making a live AWS read. To validate against
+previously cached context, provide the VPC lookup entry in CDK's standard
+`cdk.context.json` file. With cached VPC context, synthesis verifies the
+configured subnet membership and distinct AZs without AWS access.
+The supported actions are `synth` (default), `deploy`, and `destroy`; deploy and
+destroy remain unavailable for production use until platform infrastructure
+exists. A `DESTROY`
 removal policy requires `--confirm-destroy-data` for any action.
 
 Exit codes: `0` success, `2` invalid arguments or missing destructive
