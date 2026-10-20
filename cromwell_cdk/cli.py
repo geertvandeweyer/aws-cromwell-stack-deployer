@@ -175,6 +175,17 @@ def _run_cdk(args: argparse.Namespace, action: str) -> None:
         stdout_text = stdout if isinstance(stdout, str) else ""
         details = stderr_text or stdout_text
         details = details.strip()
+        if action == "synth" and "PrereqError:" in details:
+            diagnostic = " ".join(details.splitlines())
+            raise PrereqError(diagnostic)
+        if (
+            action == "synth"
+            and "Cannot retrieve value from context provider vpc-provider" in details
+        ):
+            raise PrereqError(
+                "Required prerequisite missing: VPC lookup context unavailable; "
+                "dry-run skipped AWS subnet/AZ checks"
+            )
         suffix = f": {details}" if details else ""
         raise DeployError(
             f"CDK {action} failed with exit status {completed.returncode}{suffix}"
@@ -203,7 +214,9 @@ def execute(args: argparse.Namespace) -> int:
         validate_config(config)
         if args.dry_run:
             logging.info("Stage: configuration validation and CDK synth")
-            logging.info("AWS-aware checks: skipped; CDK lookups are disabled")
+            logging.info(
+                "AWS-aware subnet/AZ checks: skipped unless lookup context is cached"
+            )
         try:
             _validate_destroy_confirmation(config, args.confirm_destroy_data)
         except ConfigError as exc:
