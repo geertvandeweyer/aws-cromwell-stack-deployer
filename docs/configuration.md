@@ -6,9 +6,10 @@ future shared `cromwell_cdk.config` module. The non-secret starting template is
 local `configuration.ini` or place credentials in it.
 
 The shared loader and deterministic validation are implemented in
-`cromwell_cdk.config`. Required sections and unknown keys are rejected, scalar
-values are parsed using the documented example's types, and diagnostics name
-the offending section/key. Defaults are applied for omitted keys.
+`cromwell_cdk.config`. Required sections are enforced, unknown sections and
+keys are rejected, scalar values are parsed using the documented example's
+types, and diagnostics name the offending section/key. Defaults are applied
+for omitted keys.
 
 Current deterministic validation covers:
 
