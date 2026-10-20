@@ -2,6 +2,18 @@
 __pycache__/
 *.py[codz]
 *$py.class
+.pytest_cache/
+.hypothesis/
+.ruff_cache/
+.coverage*
+htmlcov/
+*.egg-info/
+.pytest_cache/
+.hypothesis/
+.ruff_cache/
+.coverage*
+htmlcov/
+*.egg-info/
 
 # C extensions
 *.so
@@ -153,6 +165,8 @@ activemq-data/
 .env
 .envrc
 .venv
+configuration.ini
+cdk.out/
 env/
 venv/
 ENV/
