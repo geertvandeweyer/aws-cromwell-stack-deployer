@@ -3,8 +3,8 @@
 ## Current implementation status
 
 The repository contains the Python CDK entry point, the `deploy-cromwell` CLI,
-the shared configuration loader, and the existing-VPC network foundation. The
-CLI defaults to the safe `synth` action. Explicit `--action deploy` and
+the shared configuration loader, the existing-VPC network foundation, and a
+private artifact bucket. The CLI defaults to the safe `synth` action. Explicit `--action deploy` and
 `--action destroy` run those operations; do not use them until the platform
 resources are implemented. `--dry-run` always runs synth, even if a different
 action was requested.
@@ -44,6 +44,10 @@ lookup prerequisite instead of making a live AWS read. To validate against
 previously cached context, provide the VPC lookup entry in CDK's standard
 `cdk.context.json` file. With cached VPC context, synthesis verifies the
 configured subnet membership and distinct AZs without AWS access.
+The artifact bucket blocks public access, enforces TLS, uses KMS encryption,
+enables versioning, and is retained by default. Repository asset upload and
+checksum verification are not implemented yet; do not treat the bucket as
+populated until that work is complete.
 The supported actions are `synth` (default), `deploy`, and `destroy`; deploy and
 destroy remain unavailable for production use until platform infrastructure
 exists. A `DESTROY`
@@ -58,7 +62,18 @@ validation rules.
 
 ## Cost and teardown
 
-No AWS resources are provisioned by the current empty app. Batch, S3, optional
-storage, database, and compute costs and the final teardown procedure remain
-unverified until the corresponding infrastructure tasks and isolated AWS
-validation are complete.
+The artifact bucket is the current app's only provisioned resource. Batch,
+optional storage, database, and compute costs and the final teardown procedure
+remain unverified until the corresponding infrastructure tasks and isolated
+AWS validation are complete.
+
+
+## Artifact bucket
+
+The platform creates a dedicated artifact bucket with S3 Block Public Access,
+TLS-only access, KMS encryption, versioning, and a `RETAIN` removal policy by
+default. Its name is exposed as the `ArtifactBucketName` stack output. The
+bucket does not yet contain deployment assets; repository asset packaging,
+checksums, and upload are pending review of the legacy scripts and a pinned
+Cromwell release artifact. Do not deploy workloads that expect those assets
+until that work is completed.
