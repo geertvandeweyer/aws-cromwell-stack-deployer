@@ -26,7 +26,9 @@ Current deterministic validation covers:
 - `[mountpoint_s3]`: only `mount1` through `mount5` keys are accepted, and
 	each access mode must be `ro` or `rw`.
 - `[batch]`: non-negative minimum vCPUs, maximum vCPUs not below minimum, a
-	non-empty instance-type list, and Spot bid percentage from 1 to 100.
+	non-empty instance-type list, Spot bid percentage from 1 to 100, and
+	`priority_use_spot = false` so the priority queue remains On-Demand; setting
+	it to `true` is rejected.
 - `[artifacts] verify_checksums` must remain `true`.
 - Storage, artifact, database, encryption, FSx type, and CloudWatch retention
 	values are restricted to supported enumerations.
