@@ -35,7 +35,9 @@ class ConfigTests(TestBase):
         validate_config(config)
         self.assertEqual(config.get("deployment", "namespace"), "cromwell-prod")
         self.assertIs(config.get("artifacts", "verify_checksums"), True)
-        self.assertEqual(config.get("batch", "instance_types"), ["m5.large", "m5.xlarge"])
+        self.assertEqual(
+            config.get("batch", "instance_types"), ["m5.large", "m5.xlarge"]
+        )
 
     def test_missing_file_names_path(self) -> None:
         """Report a missing configuration file path clearly."""
@@ -45,7 +47,9 @@ class ConfigTests(TestBase):
     def test_missing_section_names_section(self) -> None:
         """Reject a configuration missing a required section."""
         self.write_config()
-        text = self.config_path.read_text().replace("[external]\nsource_cidrs =\nports =\n", "")
+        text = self.config_path.read_text().replace(
+            "[external]\nsource_cidrs =\nports =\n", ""
+        )
         self.config_path.write_text(text)
         with self.assertRaisesRegex(ConfigError, r"\[external\]"):
             load_config(self.config_path)
@@ -58,7 +62,9 @@ class ConfigTests(TestBase):
 
     def test_unknown_key_is_rejected(self) -> None:
         """Reject a typo rather than silently ignoring it."""
-        with self.assertRaisesRegex(ConfigError, r"Unknown configuration key.*\[access\].*typo"):
+        with self.assertRaisesRegex(
+            ConfigError, r"Unknown configuration key.*\[access\].*typo"
+        ):
             self.write_config()
             text = self.config_path.read_text().replace(
                 "public_access = false", "public_access = false\ntypo = ignored"
@@ -86,7 +92,9 @@ class ConfigTests(TestBase):
     def test_duplicate_or_missing_private_subnets_are_rejected(self) -> None:
         """Require two distinct, syntactically valid private subnet IDs."""
         self.write_config(
-            {"private_subnet_ids = subnet-aaaaaaaa, subnet-bbbbbbbb": "private_subnet_ids = subnet-aaaaaaaa, subnet-aaaaaaaa"}
+            {
+                "private_subnet_ids = subnet-aaaaaaaa, subnet-bbbbbbbb": "private_subnet_ids = subnet-aaaaaaaa, subnet-aaaaaaaa"
+            }
         )
         with self.assertRaisesRegex(ConfigError, "at least two distinct"):
             validate_config(load_config(self.config_path))
@@ -115,8 +123,12 @@ class ConfigTests(TestBase):
         self.write_config({"max_acu = 8": "max_acu = 0.25"})
         with self.assertRaisesRegex(ConfigError, r"\[database\] max_acu"):
             validate_config(load_config(self.config_path))
-        text = Path(__file__).parents[2].joinpath("configuration.example.ini").read_text()
-        text = text.replace("[database]\nhosted = false", "[database]\nhosted = true", 1)
+        text = (
+            Path(__file__).parents[2].joinpath("configuration.example.ini").read_text()
+        )
+        text = text.replace(
+            "[database]\nhosted = false", "[database]\nhosted = true", 1
+        )
         self.config_path.write_text(text)
         with self.assertRaisesRegex(ConfigError, r"\[database\] standalone_ok"):
             validate_config(load_config(self.config_path))
@@ -127,12 +139,20 @@ class ConfigTests(TestBase):
         with self.assertRaisesRegex(ConfigError, r"\[artifacts\] verify_checksums"):
             validate_config(load_config(self.config_path))
 
+    def test_priority_queue_cannot_use_spot(self) -> None:
+        """Keep the priority queue on On-Demand capacity."""
+        self.write_config({"priority_use_spot = false": "priority_use_spot = true"})
+        with self.assertRaisesRegex(ConfigError, r"\[batch\] priority_use_spot"):
+            validate_config(load_config(self.config_path))
+
     def test_non_finite_database_acu_is_rejected(self) -> None:
         """Reject NaN and infinity because they make ACU comparisons unreliable."""
         for value in ("nan", "inf", "-inf"):
             with self.subTest(value=value):
                 self.write_config({"min_acu = 0.5": f"min_acu = {value}"})
-                with self.assertRaisesRegex(ConfigError, r"\[database\] min_acu/max_acu"):
+                with self.assertRaisesRegex(
+                    ConfigError, r"\[database\] min_acu/max_acu"
+                ):
                     validate_config(load_config(self.config_path))
 
     def test_unrestricted_public_cidr_is_rejected(self) -> None:

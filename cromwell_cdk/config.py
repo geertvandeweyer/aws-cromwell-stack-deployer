@@ -113,7 +113,9 @@ def _parse_value(raw_value: str, default: Any) -> Any:
 def _defaults() -> dict[str, dict[str, Any]]:
     """Return the canonical typed defaults for all supported settings."""
     return {
-        "deployment": {"namespace": "",},
+        "deployment": {
+            "namespace": "",
+        },
         "network": {"vpc_id": "", "private_subnet_ids": []},
         "access": {"public_access": False, "allowed_cidrs": []},
         "storage": {
@@ -139,6 +141,7 @@ def _defaults() -> dict[str, dict[str, Any]]:
         },
         "batch": {
             "default_use_spot": True,
+            "priority_use_spot": False,
             "default_min_vcpus": 0,
             "default_max_vcpus": 256,
             "priority_min_vcpus": 0,
@@ -186,7 +189,9 @@ def load_config(path: str | Path) -> DeploymentConfig:
     try:
         loaded = parser.read(config_path)
     except (OSError, configparser.Error) as exc:
-        raise ConfigError(f"Unable to read configuration file {config_path}: {exc}") from exc
+        raise ConfigError(
+            f"Unable to read configuration file {config_path}: {exc}"
+        ) from exc
     if not loaded:
         raise ConfigError(f"Configuration file not found or unreadable: {config_path}")
 
@@ -249,10 +254,14 @@ def validate_config(config: DeploymentConfig) -> None:
     cromwell = config.section("cromwell")
     if access["public_access"]:
         if not access["allowed_cidrs"]:
-            raise ConfigError("Invalid [access] allowed_cidrs: required for public access")
+            raise ConfigError(
+                "Invalid [access] allowed_cidrs: required for public access"
+            )
         _validate_cidrs(access["allowed_cidrs"], "[access] allowed_cidrs")
         if not cromwell["hosted"]:
-            raise ConfigError("Invalid [access] public_access: requires [cromwell] hosted = true")
+            raise ConfigError(
+                "Invalid [access] public_access: requires [cromwell] hosted = true"
+            )
         if not cromwell["tls_certificate_arn"]:
             raise ConfigError(
                 "Invalid [cromwell] tls_certificate_arn: required for public access"
@@ -263,13 +272,19 @@ def validate_config(config: DeploymentConfig) -> None:
     if cromwell["hosted"]:
         version = str(cromwell["version"]).strip().lower()
         if not version or version == "latest":
-            raise ConfigError("Invalid [cromwell] version: a pinned release is required")
+            raise ConfigError(
+                "Invalid [cromwell] version: a pinned release is required"
+            )
 
     database = config.section("database")
     if not math.isfinite(database["min_acu"]) or not math.isfinite(database["max_acu"]):
-        raise ConfigError("Invalid [database] min_acu/max_acu: values must be finite numbers")
+        raise ConfigError(
+            "Invalid [database] min_acu/max_acu: values must be finite numbers"
+        )
     if database["max_acu"] < database["min_acu"]:
-        raise ConfigError("Invalid [database] max_acu: must be greater than or equal to min_acu")
+        raise ConfigError(
+            "Invalid [database] max_acu: must be greater than or equal to min_acu"
+        )
     if database["hosted"] and not cromwell["hosted"] and not database["standalone_ok"]:
         raise ConfigError(
             "Invalid [database] standalone_ok: set true to host a database without Cromwell"
@@ -292,19 +307,34 @@ def validate_config(config: DeploymentConfig) -> None:
                 f"Invalid [batch] {key}_max_vcpus: must be >= {key}_min_vcpus >= 0"
             )
     if batch["priority_min_vcpus"] > 0 and batch["priority_max_vcpus"] <= 0:
-        raise ConfigError("Invalid [batch] priority_max_vcpus: must allow On-Demand capacity")
+        raise ConfigError(
+            "Invalid [batch] priority_max_vcpus: must allow On-Demand capacity"
+        )
     if not batch["instance_types"]:
-        raise ConfigError("Invalid [batch] instance_types: at least one type is required")
+        raise ConfigError(
+            "Invalid [batch] instance_types: at least one type is required"
+        )
     if not 1 <= batch["spot_bid_percentage"] <= 100:
         raise ConfigError("Invalid [batch] spot_bid_percentage: expected 1-100")
+    if batch["priority_use_spot"]:
+        raise ConfigError(
+            "Invalid [batch] priority_use_spot: priority queue must be On-Demand"
+        )
 
     if config.get("artifacts", "verify_checksums") is not True:
         raise ConfigError("Invalid [artifacts] verify_checksums: must remain true")
     if database["removal_policy"] not in {"SNAPSHOT", "RETAIN", "DESTROY"}:
-        raise ConfigError("Invalid [database] removal_policy: expected SNAPSHOT, RETAIN, or DESTROY")
+        raise ConfigError(
+            "Invalid [database] removal_policy: expected SNAPSHOT, RETAIN, or DESTROY"
+        )
     if config.get("storage", "removal_policy") not in {"RETAIN", "DESTROY"}:
-        raise ConfigError("Invalid [storage] removal_policy: expected RETAIN or DESTROY")
-    if config.get("artifacts", "artifact_bucket_removal_policy") not in {"RETAIN", "DESTROY"}:
+        raise ConfigError(
+            "Invalid [storage] removal_policy: expected RETAIN or DESTROY"
+        )
+    if config.get("artifacts", "artifact_bucket_removal_policy") not in {
+        "RETAIN",
+        "DESTROY",
+    }:
         raise ConfigError(
             "Invalid [artifacts] artifact_bucket_removal_policy: expected RETAIN or DESTROY"
         )
@@ -328,4 +358,6 @@ def _validate_cidrs(cidrs: list[str], key: str) -> None:
         except ValueError as exc:
             raise ConfigError(f"Invalid {key}: malformed CIDR {cidr!r}") from exc
         if network.prefixlen == 0:
-            raise ConfigError(f"Invalid {key}: unrestricted CIDR {cidr!r} is prohibited")
+            raise ConfigError(
+                f"Invalid {key}: unrestricted CIDR {cidr!r} is prohibited"
+            )
