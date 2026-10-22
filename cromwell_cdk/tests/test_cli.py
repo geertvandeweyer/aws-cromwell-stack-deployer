@@ -190,6 +190,11 @@ class CliTests(TestBase):
             any(argument.startswith("deploymentConfig=") for argument in command)
         )
         self.assertNotIn("shell", run.call_args.kwargs)
+        self.assertEqual(run.call_args.kwargs["stderr"], -1)
+        self.assertEqual(run.call_args.kwargs["env"]["AWS_DEFAULT_REGION"], "eu-west-1")
+        self.assertEqual(run.call_args.kwargs["env"]["AWS_PROFILE"], "operator")
+        self.assertEqual(run.call_args.kwargs["env"]["AWS_DEFAULT_PROFILE"], "operator")
+        self.assertEqual(run.call_args.kwargs["env"]["AWS_REGION"], "eu-west-1")
 
     @patch("cromwell_cdk.cli.subprocess.run")
     @patch("cromwell_cdk.cli.shutil.which", return_value="/usr/bin/cdk")
@@ -216,6 +221,47 @@ class CliTests(TestBase):
         with patch("sys.stderr") as stderr:
             self.assertEqual(execute(args), EXIT_PREREQUISITE)
         self.assertTrue(stderr.write.called)
+
+    @patch("cromwell_cdk.cli.subprocess.run")
+    @patch("cromwell_cdk.cli.shutil.which", return_value="/usr/bin/cdk")
+    def test_synth_bucket_security_mismatch_maps_to_exit_three(
+        self, _which: Mock, run: Mock
+    ) -> None:
+        """Map synthesis-time existing bucket incompatibility to config exit 3."""
+        run.return_value = Mock(
+            returncode=1,
+            stderr=(
+                "ConfigError: Invalid [storage] existing_bucket: bucket versioning "
+                "must be Enabled"
+            ),
+            stdout="",
+        )
+        args = build_parser().parse_args(self.arguments())
+        with patch("sys.stderr") as stderr:
+            self.assertEqual(execute(args), EXIT_CONFIGURATION)
+        diagnostic = "".join(call.args[0] for call in stderr.write.call_args_list)
+        self.assertIn("versioning must be Enabled", diagnostic)
+
+    @patch("cromwell_cdk.cli.subprocess.run")
+    @patch("cromwell_cdk.cli.shutil.which", return_value="/usr/bin/cdk")
+    def test_synth_bucket_inspection_failure_maps_to_exit_four(
+        self, _which: Mock, run: Mock
+    ) -> None:
+        """Map missing AWS inspection credentials or permissions to exit 4."""
+        run.return_value = Mock(
+            returncode=1,
+            stderr=(
+                "PrereqError: Unable to validate existing [storage] bucket; "
+                "verify AWS credentials, s3:GetEncryptionConfiguration, "
+                "s3:GetBucketPublicAccessBlock, and s3:GetBucketVersioning permissions"
+            ),
+            stdout="",
+        )
+        args = build_parser().parse_args(self.arguments())
+        with patch("sys.stderr") as stderr:
+            self.assertEqual(execute(args), EXIT_PREREQUISITE)
+        diagnostic = "".join(call.args[0] for call in stderr.write.call_args_list)
+        self.assertIn("s3:GetEncryptionConfiguration", diagnostic)
 
     @patch("cromwell_cdk.cli.subprocess.run")
     @patch("cromwell_cdk.cli.shutil.which", return_value="/usr/bin/cdk")
@@ -265,7 +311,8 @@ class CliTests(TestBase):
         with patch("cromwell_cdk.cli.logging.error") as log_error:
             self.assertEqual(execute(args), EXIT_OPERATION)
         log_error.assert_called_once()
-        self.assertTrue(run.call_args.kwargs["capture_output"])
+        self.assertEqual(run.call_args.kwargs["stdout"], -1)
+        self.assertEqual(run.call_args.kwargs["stderr"], -1)
 
     @patch("cromwell_cdk.cli.subprocess.run")
     @patch("cromwell_cdk.cli.shutil.which", return_value="/usr/bin/cdk")
@@ -277,7 +324,23 @@ class CliTests(TestBase):
         args = build_parser().parse_args(self.arguments("--action", "deploy"))
         with patch("cromwell_cdk.cli.logging.error"):
             self.assertEqual(execute(args), EXIT_OPERATION)
-        self.assertFalse(run.call_args.kwargs["capture_output"])
+        self.assertIsNone(run.call_args.kwargs["stdout"])
+        self.assertEqual(run.call_args.kwargs["stderr"], -1)
+
+    @patch.dict(
+        "os.environ", {"AWS_PROFILE": "inherited", "AWS_DEFAULT_PROFILE": "inherited"}
+    )
+    @patch("cromwell_cdk.cli.subprocess.run")
+    @patch("cromwell_cdk.cli.shutil.which", return_value="/usr/bin/cdk")
+    def test_cli_without_profile_does_not_inherit_profile_override(
+        self, _which: Mock, run: Mock
+    ) -> None:
+        """Honor default AWS credential-chain behavior when profile is omitted."""
+        run.return_value = Mock(returncode=0)
+        args = build_parser().parse_args(self.arguments())
+        self.assertEqual(execute(args), EXIT_SUCCESS)
+        self.assertNotIn("AWS_PROFILE", run.call_args.kwargs["env"])
+        self.assertNotIn("AWS_DEFAULT_PROFILE", run.call_args.kwargs["env"])
 
     def test_main_initializes_logging_and_returns_exit_code(self) -> None:
         """Initialize logging in main and return the execute result."""
