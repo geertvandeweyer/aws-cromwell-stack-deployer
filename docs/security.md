@@ -11,6 +11,11 @@ checksums. Callers must obtain the expected digest from a reviewed,
 repository-controlled checksum manifest; a digest supplied by the same
 untrusted source as the object does not establish provenance.
 
+The checked-in `cromwell_cdk/assets/CHECKSUMS.sha256` currently covers this
+runner only. The Cromwell release JAR is staged separately from its pinned
+official digest or an operator override and receives a generated checksum
+entry; it is not checked into the repository because of its size.
+
 The runner does not support HTTP(S) downloads or ZIP archives. In particular,
 it does not inherit the legacy `fetch_and_run.sh` behavior of executing an
 arbitrary S3 object or a script extracted from a ZIP without an independently

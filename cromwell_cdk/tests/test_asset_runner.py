@@ -70,6 +70,18 @@ class AssetRunnerTests(TestBase):
         self.assertEqual(result.stdout, "ran:argument\n")
         self.assertTrue(self.download_log.exists())
 
+    def test_runner_checksum_matches_repository_manifest(self) -> None:
+        """Keep the committed runner bytes aligned with its reviewed manifest."""
+        manifest = RUNNER.with_name("CHECKSUMS.sha256")
+        manifest_entry = next(
+            line.split(maxsplit=1)
+            for line in manifest.read_text().splitlines()
+            if line.endswith("fetch_and_run.sh")
+        )
+        self.assertEqual(
+            manifest_entry[0], hashlib.sha256(RUNNER.read_bytes()).hexdigest()
+        )
+
     def test_runner_rejects_mismatched_checksum_before_execution(self) -> None:
         """Fail closed and do not run a payload with the wrong digest."""
         result = self.run_runner("0" * 64)
