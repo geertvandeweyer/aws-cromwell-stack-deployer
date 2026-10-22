@@ -80,9 +80,11 @@ AWS validation are complete.
 
 The platform creates a dedicated artifact bucket with S3 Block Public Access,
 TLS-only access, KMS encryption, versioning, and a `RETAIN` removal policy by
-default. Its name is exposed as the `ArtifactBucketName` stack output. The
-Cromwell JAR source supports the pinned default and explicit local/HTTPS
-overrides; wiring the verified artifact into CDK's staged assembly and
-private-bucket upload remains a separate implementation step. No large release
-JAR is checked into the repository. Do not deploy workloads that expect the
-JAR until private-bucket upload is implemented.
+default. Its name is exposed as the `ArtifactBucketName` stack output. Before
+synthesis, the app verifies every checked-in static asset against
+`cromwell_cdk/assets/CHECKSUMS.sha256`. For hosted Cromwell, it also stages and
+verifies the pinned official Cromwell 92 JAR or configured local/HTTPS override.
+CDK packages this temporary assembly and uploads it under the `assets/` prefix;
+the deployment does not prune unrelated keys and retains uploaded objects if
+the stack is removed. With hosted Cromwell disabled, no JAR path is read and no
+release download occurs. No large release JAR is checked into the repository.

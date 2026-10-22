@@ -2,13 +2,16 @@
 """Synthesize the Cromwell workflow platform CDK application."""
 
 import os
+from tempfile import TemporaryDirectory
 
 import aws_cdk as cdk
+from cromwell_cdk.artifact_assets import prepare_artifact_assets
 from cromwell_cdk.config import load_config, validate_config
 from cromwell_cdk.errors import ConfigError, PrereqError
 
 
 app = cdk.App()
+artifact_assets_temp = None
 
 config_path = app.node.try_get_context("deploymentConfig")
 if config_path:
@@ -24,11 +27,15 @@ if config_path:
         raise ConfigError("Missing required deployment region for the VPC lookup")
     from cromwell_cdk.stacks.platform_stack import PlatformStack
 
+    artifact_assets_temp = TemporaryDirectory(prefix="cromwell-cdk-assets-")
+    artifact_assets_path = prepare_artifact_assets(config, artifact_assets_temp.name)
+
     PlatformStack(
         app,
         "CromwellPlatform",
         config=config,
         env={"account": account, "region": region},
+        artifact_assets_path=str(artifact_assets_path),
     )
 
 root_bucket = app.node.try_get_context("cromwellRootBucket")
