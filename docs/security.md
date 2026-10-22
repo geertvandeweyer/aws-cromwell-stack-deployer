@@ -21,5 +21,10 @@ before reuse.
 
 The artifact bucket itself blocks S3 public access, requires TLS, uses KMS
 encryption, and is versioned. Asset upload, a signed/checked-in complete
-checksum manifest, and the pinned Cromwell release archive are still pending;
-the bucket should not yet be treated as a usable runtime artifact source.
+checksum manifest, and the pinned Cromwell release archive are still pending.
+The Cromwell JAR staging helper pins the official release digest or requires
+an operator-supplied digest for a local/HTTPS override, and verifies the bytes
+before staging. A custom URL must use HTTPS and cannot downgrade through a
+redirect. Staged bytes are not runtime-executable until private-bucket upload
+and host bootstrapping are implemented; the bucket should not yet be treated
+as a usable runtime artifact source.

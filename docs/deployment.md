@@ -45,9 +45,17 @@ previously cached context, provide the VPC lookup entry in CDK's standard
 `cdk.context.json` file. With cached VPC context, synthesis verifies the
 configured subnet membership and distinct AZs without AWS access.
 The artifact bucket blocks public access, enforces TLS, uses KMS encryption,
-enables versioning, and is retained by default. Repository asset upload and
-checksum verification are not implemented yet; do not treat the bucket as
-populated until that work is complete.
+enables versioning, and is retained by default. The staging helper verifies the
+configured Cromwell JAR and generates a `CHECKSUMS.sha256` manifest before
+placing it in a temporary assets directory. The default is the official
+Cromwell 92 release. For local validation, set
+`[cromwell] artifact_path` to a local JAR and `sha256` to its independently
+calculated digest; alternatively, set an HTTPS `artifact_url` and the expected
+`sha256`. Only one override source may be set. A mismatch fails before
+replacing the staged artifact. The user's 93-SNAPSHOT test JAR is not included
+in the repository or release defaults. Run `stage-cromwell-artifact --config
+configuration.ini --output /tmp/cromwell.jar` to stage and verify the configured
+JAR explicitly. This helper does not upload the JAR to S3.
 The supported actions are `synth` (default), `deploy`, and `destroy`; deploy and
 destroy remain unavailable for production use until platform infrastructure
 exists. A `DESTROY`
@@ -73,7 +81,8 @@ AWS validation are complete.
 The platform creates a dedicated artifact bucket with S3 Block Public Access,
 TLS-only access, KMS encryption, versioning, and a `RETAIN` removal policy by
 default. Its name is exposed as the `ArtifactBucketName` stack output. The
-bucket does not yet contain deployment assets; repository asset packaging,
-checksums, and upload are pending review of the legacy scripts and a pinned
-Cromwell release artifact. Do not deploy workloads that expect those assets
-until that work is completed.
+Cromwell JAR source supports the pinned default and explicit local/HTTPS
+overrides; wiring the verified artifact into CDK's staged assembly and
+private-bucket upload remains a separate implementation step. No large release
+JAR is checked into the repository. Do not deploy workloads that expect the
+JAR until private-bucket upload is implemented.

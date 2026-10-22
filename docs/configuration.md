@@ -21,6 +21,16 @@ Current deterministic validation covers:
 	CIDR allowlist, and a TLS certificate ARN. Unrestricted IPv4/IPv6 CIDRs are
 	rejected.
 - `[cromwell] hosted`: requires a pinned, non-empty version (not `latest`).
+	The default artifact is the official
+	[Cromwell 92 release JAR](https://github.com/broadinstitute/cromwell/releases/download/92/cromwell-92.jar),
+	SHA-256 `e0e3a050d4124e81369a79059e5774142b2f06bd89df4a0b035f559db85cedf5`.
+	`artifact_url` may override it with an HTTPS URL, or `artifact_path` may
+	select a local JAR; set exactly one and provide its expected 64-digit
+	hexadecimal `sha256`. A checksum without a source override is rejected.
+	Source staging and digest verification are provided by
+	`cromwell_cdk.artifact_source.stage_cromwell_jar` and the
+	`stage-cromwell-artifact` command. CDK synth and private bucket upload do not
+	invoke it yet.
 - `[database]`: finite ACU values with `max_acu >= min_acu`; a hosted database
 	without hosted Cromwell requires `standalone_ok = true`.
 - `[mountpoint_s3]`: only `mount1` through `mount5` keys are accepted, and
@@ -35,8 +45,10 @@ Current deterministic validation covers:
 
 External connectivity validation belongs to T033. Destructive-removal
 confirmation belongs to the CLI contract (T045). Subnet/AZ lookups, AWS
-resource checks, and artifact-source validation are not performed by this
-configuration loader. No AWS resources are created by parsing or validation.
+resource checks are not performed by this configuration loader. Artifact
+source settings are validated locally; the staging helper verifies SHA-256
+before writing the selected JAR. No AWS resources are created by parsing or
+validation.
 
 The current CDK shell does not read configuration and does not deploy AWS
 resources.
