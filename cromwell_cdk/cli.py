@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -159,12 +160,23 @@ def _run_cdk(args: argparse.Namespace, action: str) -> None:
 
     try:
         project_root = Path(__file__).resolve().parent.parent
+        process_environment = os.environ.copy()
+        process_environment["AWS_REGION"] = args.region
+        process_environment["AWS_DEFAULT_REGION"] = args.region
+        if args.profile:
+            process_environment["AWS_PROFILE"] = args.profile
+            process_environment["AWS_DEFAULT_PROFILE"] = args.profile
+        else:
+            process_environment.pop("AWS_PROFILE", None)
+            process_environment.pop("AWS_DEFAULT_PROFILE", None)
         completed = subprocess.run(
             command,
             check=False,
             cwd=project_root,
+            env=process_environment,
             text=True,
-            capture_output=action == "synth",
+            stdout=subprocess.PIPE if action == "synth" else None,
+            stderr=subprocess.PIPE,
         )
     except OSError as exc:
         raise PrereqError(f"Unable to start AWS CDK CLI: {exc}") from exc
@@ -175,9 +187,16 @@ def _run_cdk(args: argparse.Namespace, action: str) -> None:
         stdout_text = stdout if isinstance(stdout, str) else ""
         details = stderr_text or stdout_text
         details = details.strip()
+        if action != "synth":
+            raise DeployError(
+                f"CDK {action} failed with exit status {completed.returncode}"
+            )
         if action == "synth" and "PrereqError:" in details:
             diagnostic = " ".join(details.splitlines())
             raise PrereqError(diagnostic)
+        if action == "synth" and "ConfigError:" in details:
+            diagnostic = " ".join(details.splitlines())
+            raise ConfigError(diagnostic)
         if (
             action == "synth"
             and "Cannot retrieve value from context provider vpc-provider" in details
@@ -225,7 +244,8 @@ def execute(args: argparse.Namespace) -> int:
         action = "synth" if args.dry_run else args.action
         _run_cdk(args, action)
     except ConfigError as exc:
-        print(str(exc), file=sys.stderr)
+        diagnostic = " ".join(str(exc).splitlines())
+        print(diagnostic, file=sys.stderr)
         return EXIT_CONFIGURATION
     except PrereqError as exc:
         print(str(exc), file=sys.stderr)
