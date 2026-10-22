@@ -27,10 +27,13 @@ class PlatformStack(Stack):
         *,
         config: DeploymentConfig,
         env: dict[str, str],
+        artifact_assets_path: str | None = None,
     ) -> None:
         super().__init__(scope, construct_id, env=env)
         self.network = BatchNetwork(self, "Network", config)
-        self.artifacts = ArtifactBucket(self, "Artifacts", config)
+        self.artifacts = ArtifactBucket(
+            self, "Artifacts", config, asset_directory=artifact_assets_path
+        )
         CfnOutput(
             self,
             "ArtifactBucketName",
