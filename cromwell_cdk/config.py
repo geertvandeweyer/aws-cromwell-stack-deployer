@@ -13,11 +13,13 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from cromwell_cdk.errors import ConfigError
 
 
 _NAMESPACE_PATTERN = re.compile(r"^[a-z0-9-]{1,32}$")
+DEFAULT_CROMWELL_VERSION = "92"
 _ALLOWED_LOG_RETENTION_DAYS = frozenset(
     {1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, 3653}
 )
@@ -156,7 +158,10 @@ def _defaults() -> dict[str, dict[str, Any]]:
         "cromwell": {
             "hosted": False,
             "instance_type": "t3.large",
-            "version": "87",
+            "version": DEFAULT_CROMWELL_VERSION,
+            "artifact_url": "",
+            "artifact_path": "",
+            "sha256": "",
             "tls_certificate_arn": "",
         },
         "database": {
@@ -275,6 +280,40 @@ def validate_config(config: DeploymentConfig) -> None:
             raise ConfigError(
                 "Invalid [cromwell] version: a pinned release is required"
             )
+    artifact_url = cromwell["artifact_url"].strip()
+    artifact_path = cromwell["artifact_path"].strip()
+    checksum = cromwell["sha256"].strip()
+    version = str(cromwell["version"]).strip()
+    if (
+        cromwell["hosted"]
+        and version != DEFAULT_CROMWELL_VERSION
+        and not (artifact_url or artifact_path)
+    ):
+        raise ConfigError(
+            "Invalid [cromwell] version: non-default releases require an "
+            "artifact_url or artifact_path override"
+        )
+    if artifact_url and artifact_path:
+        raise ConfigError(
+            "Invalid [cromwell] artifact_url/artifact_path: configure only one override"
+        )
+    if artifact_url:
+        parsed_url = urlparse(artifact_url)
+        if parsed_url.scheme != "https" or not parsed_url.hostname:
+            raise ConfigError(
+                "Invalid [cromwell] artifact_url: expected an HTTPS URL with a hostname"
+            )
+    if (artifact_url or artifact_path) and not checksum:
+        raise ConfigError(
+            "Invalid [cromwell] sha256: required when artifact_url or "
+            "artifact_path is overridden"
+        )
+    if checksum and not (artifact_url or artifact_path):
+        raise ConfigError(
+            "Invalid [cromwell] sha256: only valid with artifact_url or artifact_path"
+        )
+    if checksum and not re.fullmatch(r"[0-9a-fA-F]{64}", checksum):
+        raise ConfigError("Invalid [cromwell] sha256: expected 64 hexadecimal digits")
 
     database = config.section("database")
     if not math.isfinite(database["min_acu"]) or not math.isfinite(database["max_acu"]):

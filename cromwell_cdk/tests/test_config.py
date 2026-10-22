@@ -102,9 +102,46 @@ class ConfigTests(TestBase):
     def test_hosted_latest_cromwell_is_rejected(self) -> None:
         """Require an immutable Cromwell release when hosting it."""
         self.write_config(
-            {"hosted = false": "hosted = true", "version = 87": "version = latest"}
+            {"hosted = false": "hosted = true", "version = 92": "version = latest"}
         )
         with self.assertRaisesRegex(ConfigError, r"\[cromwell\] version"):
+            validate_config(load_config(self.config_path))
+
+    def test_cromwell_artifact_overrides_require_a_digest(self) -> None:
+        """Require a SHA-256 for local and HTTPS artifact source overrides."""
+        self.write_config({"artifact_path =": "artifact_path = /tmp/cromwell.jar"})
+        with self.assertRaisesRegex(ConfigError, r"\[cromwell\] sha256"):
+            validate_config(load_config(self.config_path))
+
+    def test_non_default_cromwell_version_requires_an_artifact_override(self) -> None:
+        """Prevent changing the release label without changing its artifact."""
+        self.write_config(
+            {"hosted = false": "hosted = true", "version = 92": "version = 93"}
+        )
+        with self.assertRaisesRegex(ConfigError, r"non-default releases require"):
+            validate_config(load_config(self.config_path))
+
+    def test_cromwell_artifact_overrides_are_exclusive(self) -> None:
+        """Reject configuring local and URL sources at the same time."""
+        self.write_config(
+            {
+                "artifact_url =": "artifact_url = https://example.invalid/cromwell.jar",
+                "artifact_path =": "artifact_path = /tmp/cromwell.jar",
+                "sha256 =": "sha256 = " + "a" * 64,
+            }
+        )
+        with self.assertRaisesRegex(ConfigError, r"artifact_url/artifact_path"):
+            validate_config(load_config(self.config_path))
+
+    def test_cromwell_artifact_url_requires_https(self) -> None:
+        """Restrict remote Cromwell sources to HTTPS."""
+        self.write_config(
+            {
+                "artifact_url =": "artifact_url = http://example.invalid/cromwell.jar",
+                "sha256 =": "sha256 = " + "a" * 64,
+            }
+        )
+        with self.assertRaisesRegex(ConfigError, r"\[cromwell\] artifact_url"):
             validate_config(load_config(self.config_path))
 
     def test_public_access_requires_allowlist_and_tls(self) -> None:
