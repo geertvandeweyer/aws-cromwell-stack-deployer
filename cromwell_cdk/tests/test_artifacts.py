@@ -84,6 +84,32 @@ class ArtifactBucketTests(TestBase):
         asset_path = prepare_artifact_assets(
             self.config, Path(self.temp_dir) / "assembled-assets"
         )
+        import hashlib
+
+        manifest_entries = {
+            filename: digest
+            for digest, filename in (
+                line.split(maxsplit=1)
+                for line in (asset_path / "CHECKSUMS.sha256")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            )
+        }
+        self.assertTrue(manifest_entries)
+        self.assertEqual(
+            set(manifest_entries),
+            {
+                path.name
+                for path in asset_path.iterdir()
+                if path.name != "CHECKSUMS.sha256"
+            },
+        )
+        for filename, expected_digest in manifest_entries.items():
+            actual_digest = hashlib.sha256(
+                (asset_path / filename).read_bytes()
+            ).hexdigest()
+            self.assertEqual(actual_digest, expected_digest, filename)
+
         app = cdk.App(context=vpc_context())
         stack = PlatformStack(
             app,
@@ -154,6 +180,32 @@ class ArtifactBucketTests(TestBase):
                 prepare_artifact_assets(
                     self.config, Path(self.temp_dir) / "invalid-assets"
                 )
+
+    def test_checksum_mismatch_prevents_stack_synthesis(self) -> None:
+        """Reject corrupt source assets before constructing the deployment stack."""
+        from unittest.mock import patch
+
+        fixture_assets = Path(self.temp_dir) / "corrupt-source-assets"
+        fixture_assets.mkdir()
+        (fixture_assets / "CHECKSUMS.sha256").write_text(
+            "0" * 64 + "  fetch_and_run.sh\n", encoding="utf-8"
+        )
+        (fixture_assets / "fetch_and_run.sh").write_text("tampered", encoding="utf-8")
+
+        with patch("cromwell_cdk.artifact_assets.ASSET_DIRECTORY", fixture_assets):
+            with self.assertRaisesRegex(ConfigError, "checksum mismatch"):
+                asset_path = prepare_artifact_assets(
+                    self.config, Path(self.temp_dir) / "rejected-assets"
+                )
+                app = cdk.App(context=vpc_context())
+                PlatformStack(
+                    app,
+                    "CromwellPlatform",
+                    config=self.config,
+                    env={"account": ACCOUNT, "region": REGION},
+                    artifact_assets_path=str(asset_path),
+                )
+                app.synth()
 
     def test_unmanifested_static_asset_fails_closed(self) -> None:
         """Reject new files until their reviewed digest is added to the manifest."""
