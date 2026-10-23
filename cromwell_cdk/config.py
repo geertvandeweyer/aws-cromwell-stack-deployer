@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import configparser
 import ipaddress
+import json
 import math
 import re
 from dataclasses import dataclass
@@ -19,7 +20,11 @@ from cromwell_cdk.errors import ConfigError
 
 
 _NAMESPACE_PATTERN = re.compile(r"^[a-z0-9-]{1,32}$")
+_ADDITIONAL_BUCKET_KEY = re.compile(r"^bucket([1-9][0-9]*)_(name|prefix|access)$")
+_S3_BUCKET_NAME = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
 DEFAULT_CROMWELL_VERSION = "92"
+_IAM_INLINE_POLICY_LIMIT = 10_240
+_IAM_POLICY_RESERVED_BYTES = 2_048
 _ALLOWED_LOG_RETENTION_DAYS = frozenset(
     {1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, 3653}
 )
@@ -29,6 +34,7 @@ _REQUIRED_SECTIONS = frozenset(
         "network",
         "access",
         "storage",
+        "additional_s3_buckets",
         "efs",
         "fsx",
         "mountpoint_s3",
@@ -125,6 +131,7 @@ def _defaults() -> dict[str, dict[str, Any]]:
             "removal_policy": "RETAIN",
             "encryption": "SSE_KMS",
         },
+        "additional_s3_buckets": {},
         "efs": {"create": False, "existing_file_system_ids": []},
         "fsx": {
             "create": False,
@@ -212,6 +219,9 @@ def load_config(path: str | Path) -> DeploymentConfig:
 
     values = _defaults()
     for section, defaults in values.items():
+        if section == "additional_s3_buckets":
+            values[section] = _parse_additional_s3_buckets(parser)
+            continue
         unknown_keys = sorted(set(parser.options(section)) - set(defaults))
         if unknown_keys:
             unknown = ", ".join(unknown_keys)
@@ -227,6 +237,54 @@ def load_config(path: str | Path) -> DeploymentConfig:
                     f"Invalid value for [{section}] {key}: {exc}"
                 ) from exc
     return DeploymentConfig(values)
+
+
+def _parse_additional_s3_buckets(
+    parser: configparser.ConfigParser,
+) -> dict[str, dict[str, str]]:
+    """Parse sequential indexed additional bucket declarations.
+
+    Args:
+        parser: Parsed INI configuration.
+
+    Returns:
+        Bucket declarations keyed by their one-based numeric index.
+
+    Raises:
+        ConfigError: If keys are malformed or their indexes contain gaps.
+    """
+    section = "additional_s3_buckets"
+    declarations: dict[int, dict[str, str]] = {}
+    for key, raw_value in parser.items(section):
+        match = _ADDITIONAL_BUCKET_KEY.fullmatch(key)
+        if match is None:
+            raise ConfigError(
+                f"Unknown configuration key in [{section}]: {key}; expected "
+                "bucketN_name, bucketN_prefix, or bucketN_access"
+            )
+        index = int(match.group(1))
+        field = match.group(2)
+        declarations.setdefault(index, {})[field] = raw_value.strip()
+
+    if declarations and sorted(declarations) != list(range(1, max(declarations) + 1)):
+        raise ConfigError(
+            f"Invalid [{section}] declarations: bucket indexes must be sequential "
+            "starting at 1"
+        )
+
+    result: dict[str, dict[str, str]] = {}
+    for index, fields in sorted(declarations.items()):
+        if "name" not in fields or not fields["name"]:
+            raise ConfigError(
+                f"Invalid [{section}] bucket{index}_name: required when declaring "
+                "a bucket"
+            )
+        result[str(index)] = {
+            "name": fields["name"],
+            "prefix": fields.get("prefix", ""),
+            "access": fields.get("access", "readonly").lower(),
+        }
+    return result
 
 
 def validate_config(config: DeploymentConfig) -> None:
@@ -362,6 +420,7 @@ def validate_config(config: DeploymentConfig) -> None:
 
     if config.get("artifacts", "verify_checksums") is not True:
         raise ConfigError("Invalid [artifacts] verify_checksums: must remain true")
+    _validate_additional_s3_buckets(config.section("additional_s3_buckets"))
     if database["removal_policy"] not in {"SNAPSHOT", "RETAIN", "DESTROY"}:
         raise ConfigError(
             "Invalid [database] removal_policy: expected SNAPSHOT, RETAIN, or DESTROY"
@@ -400,3 +459,87 @@ def _validate_cidrs(cidrs: list[str], key: str) -> None:
             raise ConfigError(
                 f"Invalid {key}: unrestricted CIDR {cidr!r} is prohibited"
             )
+
+
+def _validate_additional_s3_buckets(
+    declarations: dict[str, dict[str, str]],
+) -> None:
+    """Validate extra S3 grant inputs and their estimated IAM policy size.
+
+    Args:
+        declarations: Parsed entries from `[additional_s3_buckets]`.
+
+    Raises:
+        ConfigError: If a bucket declaration or policy-size budget is invalid.
+    """
+    estimated_policy = _IAM_POLICY_RESERVED_BYTES
+    for index, grant in declarations.items():
+        name = grant["name"]
+        if (
+            not _S3_BUCKET_NAME.fullmatch(name)
+            or ".." in name
+            or ".-" in name
+            or "-." in name
+        ):
+            raise ConfigError(
+                f"Invalid [additional_s3_buckets] bucket{index}_name: "
+                "expected a valid S3 bucket name"
+            )
+        try:
+            ipaddress.ip_address(name)
+        except ValueError:
+            pass
+        else:
+            raise ConfigError(
+                f"Invalid [additional_s3_buckets] bucket{index}_name: "
+                "an IP address cannot be used as a bucket name"
+            )
+
+        access = grant["access"]
+        if access not in {"readonly", "full"}:
+            raise ConfigError(
+                f"Invalid [additional_s3_buckets] bucket{index}_access: "
+                "expected readonly or full"
+            )
+        prefix = grant["prefix"]
+        if any(character in prefix for character in ("*", "?", "\\")):
+            raise ConfigError(
+                f"Invalid [additional_s3_buckets] bucket{index}_prefix: "
+                "wildcards and backslashes are not allowed"
+            )
+
+        bucket_arn = f"arn:aws:s3:::{name}"
+        object_arn = f"{bucket_arn}/{prefix}*"
+        list_statement: dict[str, Any] = {
+            "Effect": "Allow",
+            "Action": ["s3:ListBucket"],
+            "Resource": [bucket_arn],
+        }
+        if prefix:
+            list_statement["Condition"] = {
+                "StringLike": {"s3:prefix": [prefix, f"{prefix}*"]}
+            }
+        object_actions = ["s3:GetObject"]
+        if access == "full":
+            object_actions.extend(
+                [
+                    "s3:PutObject",
+                    "s3:DeleteObject",
+                    "s3:AbortMultipartUpload",
+                ]
+            )
+        object_statement = {
+            "Effect": "Allow",
+            "Action": object_actions,
+            "Resource": [object_arn],
+        }
+        estimated_policy += len(
+            json.dumps([list_statement, object_statement], separators=(",", ":"))
+        )
+
+    if estimated_policy > _IAM_INLINE_POLICY_LIMIT:
+        raise ConfigError(
+            "Invalid [additional_s3_buckets]: estimated Batch instance inline "
+            f"policy size {estimated_policy} exceeds the safe budget of "
+            f"{_IAM_INLINE_POLICY_LIMIT} characters"
+        )
