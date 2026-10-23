@@ -11,6 +11,24 @@ from cromwell_cdk.tests.base import TestBase
 class BatchRoleTests(TestBase):
     """Verify trust relationships and resource-scoped S3 permissions."""
 
+    @staticmethod
+    def _policy_statements(template: assertions.Template) -> list[dict]:
+        """Collect inline and attached IAM policy statements from a template."""
+        statements = []
+        for resource_type in ("AWS::IAM::Role", "AWS::IAM::Policy"):
+            for resource in template.find_resources(resource_type).values():
+                properties = resource["Properties"]
+                if resource_type == "AWS::IAM::Policy":
+                    policies = [properties["PolicyDocument"]]
+                else:
+                    policies = [
+                        policy["PolicyDocument"]
+                        for policy in properties.get("Policies", [])
+                    ]
+                for policy in policies:
+                    statements.extend(policy.get("Statement", []))
+        return statements
+
     def test_roles_have_batch_and_ec2_trust_and_scoped_bucket_access(self) -> None:
         """Separate AWS-managed baseline policies from explicit S3 grants."""
         app = cdk.App()
@@ -109,3 +127,58 @@ class BatchRoleTests(TestBase):
                     resources = [resource] if isinstance(resource, str) else resource
                     self.assertIsNotNone(resources)
                     self.assertNotIn("*", resources)
+
+    def test_additional_bucket_grants_are_prefix_scoped_and_readonly_or_full(
+        self,
+    ) -> None:
+        """Grant requested S3 operations only on each declared bucket and prefix."""
+        app = cdk.App()
+        stack = cdk.Stack(app, "AdditionalBucketIamTest")
+        roles = BatchRoles(
+            stack,
+            "BatchRoles",
+            artifact_bucket=s3.Bucket(stack, "ArtifactBucket"),
+            data_bucket=s3.Bucket(stack, "DataBucket"),
+            additional_s3_grants={
+                "1": {
+                    "name": "readonly-inputs",
+                    "prefix": "cohort-a/",
+                    "access": "readonly",
+                },
+                "2": {"name": "full-results", "prefix": "", "access": "full"},
+            },
+        )
+        statements = self._policy_statements(assertions.Template.from_stack(stack))
+        rendered = str(statements)
+
+        self.assertIn("readonly-inputs/cohort-a/*", rendered)
+        self.assertIn("cohort-a/*", rendered)
+        self.assertIn("full-results/*", rendered)
+        self.assertIn("s3:PutObject", rendered)
+        self.assertIn("s3:DeleteObject", rendered)
+        self.assertNotIn("s3:PutBucket", rendered)
+        self.assertNotIn("s3:DeleteBucket", rendered)
+        self.assertNotIn("s3:ListAllMyBuckets", rendered)
+        self.assertIsNotNone(roles.instance_role)
+
+        readonly_object_statements = [
+            statement
+            for statement in statements
+            if "readonly-inputs" in str(statement.get("Resource", ""))
+            and "cohort-a" in str(statement.get("Resource", ""))
+        ]
+        self.assertTrue(readonly_object_statements)
+        self.assertTrue(
+            all(
+                not any(
+                    action
+                    in {"s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"}
+                    for action in (
+                        statement["Action"]
+                        if isinstance(statement["Action"], list)
+                        else [statement["Action"]]
+                    )
+                )
+                for statement in readonly_object_statements
+            )
+        )

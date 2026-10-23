@@ -46,6 +46,17 @@ bucket only with the `assets/` prefix, read objects under `assets/*`, and read
 and write objects in the primary workflow data bucket. These permissions do
 not grant access to other artifact-bucket prefixes or wildcard S3 resources.
 
+Operators may declare additional S3 grants in `[additional_s3_buckets]`.
+These grants apply to the Batch instance role and support an optional object
+prefix plus `readonly` or `full` access. `readonly` permits `ListBucket` only
+within the declared prefix and `GetObject` on matching objects. `full` adds
+object-level `PutObject`, `DeleteObject`, and multipart-abort actions; it does
+not grant bucket administration or access to other buckets. Adding or removing
+a declaration and redeploying reconciles the role policy through the stack.
+For cross-account buckets, the bucket owner must also authorize the role in the
+bucket policy. These additional declarations do not grant access to the
+Cromwell host role.
+
 This construct is implemented and template-tested, but is not yet connected to
 `PlatformStack` or an AWS Batch compute environment. Deployment behavior for
 these roles therefore remains pending that integration.
