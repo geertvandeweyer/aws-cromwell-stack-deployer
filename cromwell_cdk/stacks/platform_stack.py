@@ -7,7 +7,9 @@ from constructs import Construct
 
 from cromwell_cdk.config import DeploymentConfig
 from cromwell_cdk.constructs.artifacts import ArtifactBucket
+from cromwell_cdk.constructs.iam import BatchRoles
 from cromwell_cdk.constructs.network import BatchNetwork
+from cromwell_cdk.constructs.storage import DataBucket
 
 
 class PlatformStack(Stack):
@@ -39,4 +41,26 @@ class PlatformStack(Stack):
             "ArtifactBucketName",
             value=self.artifacts.bucket.bucket_name,
             description="Private bucket for repository-owned deployment assets",
+        )
+        data_bucket_name = self.node.try_get_context("cromwellRootBucket")
+        if not data_bucket_name:
+            return
+        self.data = DataBucket(
+            self,
+            "Data",
+            bucket_name=str(data_bucket_name),
+            config=config,
+        )
+        self.iam = BatchRoles(
+            self,
+            "BatchIam",
+            artifact_bucket=self.artifacts.bucket,
+            data_bucket=self.data.bucket,
+            additional_s3_grants=config.section("additional_s3_buckets"),
+        )
+        CfnOutput(
+            self,
+            "DataBucketName",
+            value=self.data.bucket.bucket_name,
+            description="Primary S3 bucket for workflow data",
         )

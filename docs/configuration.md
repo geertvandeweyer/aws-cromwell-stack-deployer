@@ -33,6 +33,13 @@ Current deterministic validation covers:
 	invoke it yet.
 - `[database]`: finite ACU values with `max_acu >= min_acu`; a hosted database
 	without hosted Cromwell requires `standalone_ok = true`.
+- `[additional_s3_buckets]`: declare sequential `bucketN_name` entries with
+	optional `bucketN_prefix` and `bucketN_access` (`readonly` by default, or
+	`full`). Bucket names, prefixes, modes, gaps, incomplete entries, and a
+	conservative inline IAM policy-size budget are validated before synthesis.
+	Grants apply to Batch workers; changing the declarations is reconciled by
+	the normal stack deployment. Cross-account bucket policies remain the
+	bucket owner's responsibility.
 - `[mountpoint_s3]`: only `mount1` through `mount5` keys are accepted, and
 	each access mode must be `ro` or `rw`.
 - `[batch]`: non-negative minimum vCPUs, maximum vCPUs not below minimum, a
