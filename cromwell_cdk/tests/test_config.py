@@ -219,3 +219,84 @@ class ConfigTests(TestBase):
         self.config_path.write_text(text)
         with self.assertRaisesRegex(ConfigError, r"\[mountpoint_s3\].*mount6_bucket"):
             load_config(self.config_path)
+
+    def test_additional_bucket_grants_load_with_safe_defaults(self) -> None:
+        """Parse sequential bucket declarations and default omitted access to read-only."""
+        self.config_path.write_text(
+            self.config_path.read_text().replace(
+                "[additional_s3_buckets]",
+                "[additional_s3_buckets]\n"
+                "bucket1_name = shared-inputs\n"
+                "bucket1_prefix = cohort-a/\n"
+                "bucket2_name = shared-results\n"
+                "bucket2_access = full",
+            )
+        )
+        config = load_config(self.config_path)
+        validate_config(config)
+        self.assertEqual(
+            config.get("additional_s3_buckets", "1"),
+            {"name": "shared-inputs", "prefix": "cohort-a/", "access": "readonly"},
+        )
+        self.assertEqual(
+            config.get("additional_s3_buckets", "2"),
+            {"name": "shared-results", "prefix": "", "access": "full"},
+        )
+
+    def test_additional_bucket_indexes_must_be_sequential(self) -> None:
+        """Reject gaps in bucket indexes to avoid silently skipped declarations."""
+        self.config_path.write_text(
+            self.config_path.read_text().replace(
+                "[additional_s3_buckets]",
+                "[additional_s3_buckets]\nbucket2_name = shared-inputs",
+            )
+        )
+        with self.assertRaisesRegex(ConfigError, "indexes must be sequential"):
+            load_config(self.config_path)
+
+    def test_additional_bucket_declaration_requires_name(self) -> None:
+        """Reject partially declared indexed buckets without a name."""
+        self.config_path.write_text(
+            self.config_path.read_text().replace(
+                "[additional_s3_buckets]",
+                "[additional_s3_buckets]\nbucket1_access = readonly",
+            )
+        )
+        with self.assertRaisesRegex(ConfigError, r"bucket1_name: required"):
+            load_config(self.config_path)
+
+    def test_additional_bucket_rejects_invalid_names_modes_and_prefixes(self) -> None:
+        """Validate the bucket identifier, access mode, and safe prefix contract."""
+        invalid_values = (
+            ("bucket1_name = shared-inputs", "bucket1_name = Invalid_Bucket"),
+            ("bucket1_access = readonly", "bucket1_access = admin"),
+            ("bucket1_prefix = cohort-a/", "bucket1_prefix = cohort-*/"),
+        )
+        for old, new in invalid_values:
+            with self.subTest(new=new):
+                self.write_config()
+                self.config_path.write_text(
+                    self.config_path.read_text().replace(
+                        "[additional_s3_buckets]",
+                        "[additional_s3_buckets]\n"
+                        "bucket1_name = shared-inputs\n"
+                        "bucket1_prefix = cohort-a/\n"
+                        "bucket1_access = readonly",
+                    )
+                )
+                self.config_path.write_text(
+                    self.config_path.read_text().replace(old, new)
+                )
+                with self.assertRaisesRegex(ConfigError, r"\[additional_s3_buckets\]"):
+                    validate_config(load_config(self.config_path))
+
+    def test_additional_bucket_rejects_unknown_declaration_key(self) -> None:
+        """Reject typos in the indexed additional bucket syntax."""
+        self.config_path.write_text(
+            self.config_path.read_text().replace(
+                "[additional_s3_buckets]",
+                "[additional_s3_buckets]\nbucket1_typo = shared-inputs",
+            )
+        )
+        with self.assertRaisesRegex(ConfigError, "Unknown configuration key"):
+            load_config(self.config_path)
