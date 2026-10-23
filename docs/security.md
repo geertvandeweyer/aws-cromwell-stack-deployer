@@ -33,3 +33,19 @@ before staging. A custom URL must use HTTPS and cannot downgrade through a
 redirect. Staged bytes are not runtime-executable until private-bucket upload
 and host bootstrapping are implemented; the bucket should not yet be treated
 as a usable runtime artifact source.
+
+## AWS Batch role permissions
+
+The `BatchRoles` construct defines separate service and compute roles. The
+service role trusts `batch.amazonaws.com` and attaches the AWS-managed
+`AWSBatchServiceRole` policy. The EC2 instance role trusts
+`ec2.amazonaws.com` and attaches the AWS-managed
+`AmazonEC2ContainerServiceforEC2Role` policy for ECS container-instance
+operation. Its explicit S3 permissions are narrower: it can list the artifact
+bucket only with the `assets/` prefix, read objects under `assets/*`, and read
+and write objects in the primary workflow data bucket. These permissions do
+not grant access to other artifact-bucket prefixes or wildcard S3 resources.
+
+This construct is implemented and template-tested, but is not yet connected to
+`PlatformStack` or an AWS Batch compute environment. Deployment behavior for
+these roles therefore remains pending that integration.
