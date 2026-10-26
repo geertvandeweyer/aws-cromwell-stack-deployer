@@ -72,8 +72,7 @@ class NetworkTests(TestBase):
         super().setUp()
         self.config_path = Path(self.temp_dir) / "configuration.ini"
         self.config_path.write_text(
-            (Path(__file__).parents[2] / "configuration.example.ini")
-            .read_text()
+            (Path(__file__).parents[2] / "configuration.example.ini").read_text()
         )
         self.config = load_config(self.config_path)
 
@@ -111,18 +110,93 @@ class NetworkTests(TestBase):
         )
 
     def test_platform_stack_is_environment_bound_and_synthesizes(self) -> None:
-        """Bind the platform stack to the region/account required for lookup."""
+        """Bind platform resources and additional bucket IAM to the deployment."""
+        self.config_path.write_text(
+            self.config_path.read_text().replace(
+                "[additional_s3_buckets]",
+                "[additional_s3_buckets]\n"
+                "bucket1_name = shared-inputs\n"
+                "bucket1_prefix = cohort-a/\n"
+                "bucket1_access = readonly",
+            )
+        )
+        self.config = load_config(self.config_path)
         app = cdk.App(context=vpc_context())
+        app.node.set_context("cromwellRootBucket", "workflow-data-bucket")
         stack = PlatformStack(
             app,
             "CromwellPlatform",
             config=self.config,
             env={"account": ACCOUNT, "region": REGION},
         )
-        assertions.Template.from_stack(stack).has_resource_properties(
+        template = assertions.Template.from_stack(stack)
+        template.has_resource_properties(
             "AWS::EC2::SecurityGroup",
             {"GroupDescription": "Cromwell Batch compute security group"},
         )
+        template.has_output("DataBucketName", {})
+        template.has_resource_properties(
+            "AWS::S3::Bucket",
+            {
+                "BucketName": "workflow-data-bucket",
+                "BucketEncryption": assertions.Match.any_value(),
+            },
+        )
+        policies = template.find_resources("AWS::IAM::Policy")
+        rendered_policies = str(policies)
+        self.assertIn("shared-inputs/cohort-a/*", rendered_policies)
+        self.assertIn("'s3:prefix'", rendered_policies)
+        self.assertIn("'s3:GetObject'", rendered_policies)
+
+    def test_adding_bucket_grant_changes_only_iam_policy(self) -> None:
+        """Reconcile a config-only grant as IAM without changing other resources."""
+        app = cdk.App(context=vpc_context())
+        app.node.set_context("cromwellRootBucket", "workflow-data-bucket")
+        stack = PlatformStack(
+            app,
+            "CromwellPlatform",
+            config=self.config,
+            env={"account": ACCOUNT, "region": REGION},
+        )
+        baseline = assertions.Template.from_stack(stack).to_json()
+
+        updated_values = {
+            **self.config.values,
+            "additional_s3_buckets": {
+                "1": {
+                    "name": "shared-inputs",
+                    "prefix": "cohort-a/",
+                    "access": "readonly",
+                }
+            },
+        }
+        updated_config = type(self.config)(updated_values)
+        updated_app = cdk.App(context=vpc_context())
+        updated_app.node.set_context("cromwellRootBucket", "workflow-data-bucket")
+        updated_stack = PlatformStack(
+            updated_app,
+            "CromwellPlatform",
+            config=updated_config,
+            env={"account": ACCOUNT, "region": REGION},
+        )
+        updated = assertions.Template.from_stack(updated_stack).to_json()
+
+        baseline_resources = baseline.get("Resources", {})
+        updated_resources = updated.get("Resources", {})
+        changed_resources = {
+            logical_id
+            for logical_id in baseline_resources.keys() | updated_resources.keys()
+            if baseline_resources.get(logical_id) != updated_resources.get(logical_id)
+        }
+        self.assertEqual(
+            changed_resources, {"BatchIamBatchInstanceRoleDefaultPolicy8E105532"}
+        )
+        self.assertEqual(
+            len(baseline.get("Resources", {})),
+            len(updated.get("Resources", {})),
+        )
+        self.assertIn("shared-inputs/cohort-a/*", str(updated))
+        self.assertNotIn("shared-inputs", str(baseline))
 
     def test_configured_subnet_not_in_vpc_fails_as_prerequisite(self) -> None:
         """Reject configured IDs absent from the looked-up private subnet set."""
