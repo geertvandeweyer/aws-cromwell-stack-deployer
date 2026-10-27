@@ -1,5 +1,30 @@
 # Research: Cromwell AWS CDK Migration
 
+## R7: Aurora MySQL Serverless v2 engine version
+
+**Status**: Candidate pin for T029; live regional orderability remains unverified.
+
+**Decision**: Use Aurora MySQL `8.0.mysql_aurora.3.12.0` as the reviewed engine
+pin and require an explicit matching `[database] engine_version` whenever the
+hosted database is enabled. This version is represented by the CDK Aurora
+MySQL engine-version API and synthesizes as an Aurora Serverless v2 cluster.
+Before deployment, operators must verify that the version is orderable in the
+target region with `aws rds describe-orderable-db-instance-options` for
+`db.serverless`; do not treat synthesis as proof of regional availability.
+
+**Credential rotation**: The generated database secret is not automatically
+rotated by default. Cromwell resolves JDBC credentials at service startup and
+does not hot-refresh the database connection pool when Secrets Manager changes
+the password. `[database] rotate_secret = true` opts into 30-day single-user
+rotation, but requires an operator-managed service restart/credential refresh
+procedure to avoid authentication failures after rotation.
+
+**References**:
+
+- Aurora MySQL engine versions: https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/AuroraMySQL.Updates.80.html
+- Aurora Serverless v2 requirements: https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-serverless-v2.requirements.html
+- RDS orderable instance options: https://docs.aws.amazon.com/cli/latest/reference/rds/describe-orderable-db-instance-options.html
+
 ## R8: AWS Batch compute AMI family
 
 **Status**: Decision for T022a (2026-10-26)

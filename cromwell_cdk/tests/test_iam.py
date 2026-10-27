@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import aws_cdk as cdk
-from aws_cdk import assertions, aws_s3 as s3
-from cromwell_cdk.constructs.iam import BatchRoles
+from aws_cdk import assertions, aws_iam as iam, aws_s3 as s3
+from cromwell_cdk.constructs.iam import BatchRoles, CromwellServerRole
 from cromwell_cdk.tests.base import TestBase
 
 
@@ -181,4 +181,47 @@ class BatchRoleTests(TestBase):
                 )
                 for statement in readonly_object_statements
             )
+        )
+
+    def test_cromwell_passes_only_batch_job_role_to_ecs_tasks(self) -> None:
+        """Scope job-role passing to ECS tasks and the configured Batch job role."""
+        app = cdk.App()
+        stack = cdk.Stack(app, "CromwellServerIamTest")
+        batch_job_role = iam.Role(
+            stack,
+            "BatchJobRole",
+            assumed_by=iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
+        )
+        CromwellServerRole(
+            stack,
+            "CromwellServerRole",
+            data_bucket=s3.Bucket(stack, "DataBucket"),
+            artifact_bucket=s3.Bucket(stack, "ArtifactBucket"),
+            default_queue_arn="arn:aws:batch:us-east-1:123456789012:job-queue/default",
+            priority_queue_arn="arn:aws:batch:us-east-1:123456789012:job-queue/priority",
+            batch_job_role_arn=batch_job_role.role_arn,
+            log_group_arn="arn:aws:logs:us-east-1:123456789012:log-group:/cromwell/server",
+        )
+        template = assertions.Template.from_stack(stack)
+        template.has_resource_properties(
+            "AWS::IAM::Policy",
+            {
+                "PolicyDocument": {
+                    "Statement": assertions.Match.array_with(
+                        [
+                            assertions.Match.object_like(
+                                {
+                                    "Action": "iam:PassRole",
+                                    "Resource": assertions.Match.any_value(),
+                                    "Condition": {
+                                        "StringEquals": {
+                                            "iam:PassedToService": "ecs-tasks.amazonaws.com"
+                                        }
+                                    },
+                                }
+                            )
+                        ]
+                    )
+                }
+            },
         )

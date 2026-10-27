@@ -18,7 +18,9 @@ class ConfigPropertyTests(TestBase):
     @settings(max_examples=100, derandomize=True)
     @given(
         namespace=st.text(
-            alphabet=string.ascii_letters + string.digits + "_-!.", min_size=0, max_size=40
+            alphabet=string.ascii_letters + string.digits + "_-!.",
+            min_size=0,
+            max_size=40,
         )
     )
     def test_namespace_acceptance_matches_contract(self, namespace: str) -> None:
@@ -29,13 +31,15 @@ class ConfigPropertyTests(TestBase):
         """
         logging.getLogger(__name__).info("Hypothesis example namespace=%r", namespace)
         example = (Path(__file__).parents[2] / "configuration.example.ini").read_text()
-        example = example.replace("namespace = cromwell-prod", f"namespace = {namespace}", 1)
+        example = example.replace(
+            "namespace = cromwell-prod", f"namespace = {namespace}", 1
+        )
         path = Path(self.temp_dir) / "configuration.ini"
         path.write_text(example)
         config = load_config(path)
-        allowed = (
-            1 <= len(namespace) <= 32
-            and all(character in string.ascii_lowercase + string.digits + "-" for character in namespace)
+        allowed = 1 <= len(namespace) <= 32 and all(
+            character in string.ascii_lowercase + string.digits + "-"
+            for character in namespace
         )
         if allowed:
             validate_config(config)
@@ -46,10 +50,14 @@ class ConfigPropertyTests(TestBase):
     @settings(max_examples=80, derandomize=True)
     @given(
         cidr=st.text(
-            alphabet=string.ascii_letters + string.digits + ".:/_-", min_size=0, max_size=48
+            alphabet=string.ascii_letters + string.digits + ".:/_-",
+            min_size=0,
+            max_size=48,
         )
     )
-    def test_generated_public_cidrs_never_allow_unrestricted_or_malformed(self, cidr: str) -> None:
+    def test_generated_public_cidrs_never_allow_unrestricted_or_malformed(
+        self, cidr: str
+    ) -> None:
         """Reject malformed and unrestricted public CIDR values.
 
         Args:
@@ -60,7 +68,11 @@ class ConfigPropertyTests(TestBase):
         example = example.replace("public_access = false", "public_access = true", 1)
         example = example.replace("hosted = false", "hosted = true", 1)
         example = example.replace("allowed_cidrs =", f"allowed_cidrs = {cidr}", 1)
-        example = example.replace("tls_certificate_arn =", "tls_certificate_arn = arn:aws:acm:us-east-1:123456789012:certificate/test", 1)
+        example = example.replace(
+            "tls_certificate_arn =",
+            "tls_certificate_arn = arn:aws:acm:us-east-1:123456789012:certificate/test",
+            1,
+        )
         path = Path(self.temp_dir) / "public.ini"
         path.write_text(example)
         config = load_config(path)
