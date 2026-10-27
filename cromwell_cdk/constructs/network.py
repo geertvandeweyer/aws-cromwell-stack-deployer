@@ -47,6 +47,8 @@ class BatchNetwork(Construct):
         selected_subnets = [
             private_subnets[subnet_id] for subnet_id in configured_subnet_ids
         ]
+        self.private_subnets = selected_subnets
+        self.private_subnet_ids = configured_subnet_ids
         availability_zones = [subnet.availability_zone for subnet in selected_subnets]
         if len(set(availability_zones)) != len(availability_zones):
             raise ConfigError(

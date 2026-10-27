@@ -148,6 +148,75 @@ class NetworkTests(TestBase):
         self.assertIn("'s3:prefix'", rendered_policies)
         self.assertIn("'s3:GetObject'", rendered_policies)
 
+    def test_default_stack_has_queues_and_no_optional_hosted_resources(self) -> None:
+        """Keep hosted Cromwell and Aurora absent from the default stack."""
+        app = cdk.App(context=vpc_context())
+        app.node.set_context("cromwellRootBucket", "workflow-data-bucket")
+        stack = PlatformStack(
+            app,
+            "CromwellPlatform",
+            config=self.config,
+            env={"account": ACCOUNT, "region": REGION},
+        )
+        template = assertions.Template.from_stack(stack)
+        template.resource_count_is("AWS::Batch::JobQueue", 2)
+        template.has_output("DefaultQueueName", {})
+        template.has_output("PriorityQueueName", {})
+        template.resource_count_is("AWS::RDS::DBCluster", 0)
+        template.resource_count_is("AWS::EC2::Instance", 0)
+        template.resource_count_is("AWS::ElasticLoadBalancingV2::LoadBalancer", 0)
+        outputs = template.to_json().get("Outputs", {})
+        self.assertNotIn("CromwellEndpoint", outputs)
+        self.assertNotIn("DatabaseSecretArn", outputs)
+
+    def test_hosted_cromwell_and_database_synthesize_conditionally(self) -> None:
+        """Create Aurora and a restricted internal ALB only when opted in."""
+        text = (
+            self.config_path.read_text()
+            .replace("[cromwell]\nhosted = false", "[cromwell]\nhosted = true")
+            .replace(
+                "[database]\nhosted = false",
+                "[database]\nhosted = true",
+            )
+            .replace("engine_version =", "engine_version = 8.0.mysql_aurora.3.12.0", 1)
+        )
+        self.config_path.write_text(text)
+        config = load_config(self.config_path)
+        app = cdk.App(context=vpc_context())
+        app.node.set_context("cromwellRootBucket", "workflow-data-bucket")
+        stack = PlatformStack(
+            app,
+            "CromwellPlatform",
+            config=config,
+            env={"account": ACCOUNT, "region": REGION},
+        )
+        template = assertions.Template.from_stack(stack)
+        template.resource_count_is("AWS::RDS::DBCluster", 1)
+        template.resource_count_is("AWS::EC2::Instance", 1)
+        template.resource_count_is("AWS::ElasticLoadBalancingV2::LoadBalancer", 1)
+        template.has_output("CromwellEndpoint", {})
+        template.has_output("DatabaseSecretArn", {})
+        template.has_output("BatchWorkflowJobRoleArn", {})
+        user_data = str(
+            next(iter(template.find_resources("AWS::EC2::Instance").values()))[
+                "Properties"
+            ]["UserData"]
+        )
+        self.assertIn(
+            "awscli.amazonaws.com/awscli-exe-linux-${AWS_CLI_ARCH}.zip", user_data
+        )
+        self.assertIn("/tmp/aws/install --install-dir /usr/local/aws-cli", user_data)
+        self.assertIn(
+            "install -o ec2-user -g ec2-user -m 0644 /opt/cromwell/assets/cromwell.jar",
+            user_data,
+        )
+        self.assertLess(
+            user_data.index("/tmp/aws/install --install-dir"),
+            user_data.index("aws s3 cp"),
+        )
+        ingress_rules = template.find_resources("AWS::EC2::SecurityGroupIngress")
+        self.assertNotIn("0.0.0.0/0", str(ingress_rules))
+
     def test_adding_bucket_grant_changes_only_iam_policy(self) -> None:
         """Reconcile a config-only grant as IAM without changing other resources."""
         app = cdk.App(context=vpc_context())
@@ -189,7 +258,11 @@ class NetworkTests(TestBase):
             if baseline_resources.get(logical_id) != updated_resources.get(logical_id)
         }
         self.assertEqual(
-            changed_resources, {"BatchIamBatchInstanceRoleDefaultPolicy8E105532"}
+            changed_resources,
+            {
+                "BatchIamBatchInstanceRoleDefaultPolicy8E105532",
+                "BatchIamBatchJobRoleDefaultPolicy336AA8A2",
+            },
         )
         self.assertEqual(
             len(baseline.get("Resources", {})),

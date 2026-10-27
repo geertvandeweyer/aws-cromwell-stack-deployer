@@ -89,18 +89,22 @@ class AssetRunnerTests(TestBase):
         self.assertIn("SHA-256 mismatch", result.stderr)
         self.assertNotIn("ran:argument", result.stdout)
 
-    def test_runner_requires_checksum_before_download(self) -> None:
-        """Reject a missing expected digest before invoking AWS CLI."""
+    def test_runner_warns_and_computes_digest_when_checksum_is_missing(self) -> None:
+        """Run without an expected digest only after warning and hashing locally."""
         self.env.pop("BATCH_FILE_SHA256", None)
         result = subprocess.run(
-            ["bash", str(RUNNER)],
+            ["bash", str(RUNNER), "argument"],
             check=False,
             capture_output=True,
             text=True,
             env=self.env,
         )
-        self.assertEqual(result.returncode, 2)
-        self.assertFalse(self.download_log.exists())
+        expected_digest = hashlib.sha256(self.payload.read_bytes()).hexdigest()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("potential data corruption cannot be ruled out", result.stderr)
+        self.assertIn(expected_digest, result.stderr)
+        self.assertEqual(result.stdout, "ran:argument\n")
+        self.assertTrue(self.download_log.exists())
 
     def test_runner_rejects_zip_urls(self) -> None:
         """Do not accept arbitrary archive execution as the S3 source."""

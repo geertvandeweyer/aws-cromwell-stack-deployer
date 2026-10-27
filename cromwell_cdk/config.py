@@ -175,6 +175,7 @@ def _defaults() -> dict[str, dict[str, Any]]:
             "hosted": False,
             "standalone_ok": False,
             "engine_version": "",
+            "rotate_secret": False,
             "min_acu": 0.5,
             "max_acu": 8.0,
             "removal_policy": "SNAPSHOT",
@@ -374,6 +375,11 @@ def validate_config(config: DeploymentConfig) -> None:
         raise ConfigError("Invalid [cromwell] sha256: expected 64 hexadecimal digits")
 
     database = config.section("database")
+    if database["hosted"] and database["engine_version"] != "8.0.mysql_aurora.3.12.0":
+        raise ConfigError(
+            "Invalid [database] engine_version: hosted Aurora requires "
+            "8.0.mysql_aurora.3.12.0"
+        )
     if not math.isfinite(database["min_acu"]) or not math.isfinite(database["max_acu"]):
         raise ConfigError(
             "Invalid [database] min_acu/max_acu: values must be finite numbers"

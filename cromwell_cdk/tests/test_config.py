@@ -35,6 +35,7 @@ class ConfigTests(TestBase):
         validate_config(config)
         self.assertEqual(config.get("deployment", "namespace"), "cromwell-prod")
         self.assertIs(config.get("artifacts", "verify_checksums"), True)
+        self.assertIs(config.get("database", "rotate_secret"), False)
         self.assertEqual(
             config.get("batch", "instance_types"), ["m5.large", "m5.xlarge"]
         )
@@ -165,6 +166,9 @@ class ConfigTests(TestBase):
         )
         text = text.replace(
             "[database]\nhosted = false", "[database]\nhosted = true", 1
+        )
+        text = text.replace(
+            "engine_version =", "engine_version = 8.0.mysql_aurora.3.12.0", 1
         )
         self.config_path.write_text(text)
         with self.assertRaisesRegex(ConfigError, r"\[database\] standalone_ok"):

@@ -3,11 +3,12 @@
 ## Current implementation status
 
 The repository contains the Python CDK entry point, the `deploy-cromwell` CLI,
-the shared configuration loader, the existing-VPC network foundation, and a
-private artifact bucket. The CLI defaults to the safe `synth` action. Explicit `--action deploy` and
-`--action destroy` run those operations; do not use them until the platform
-resources are implemented. `--dry-run` always runs synth, even if a different
-action was requested.
+the existing-VPC network foundation, encrypted workflow/artifact buckets,
+Batch queues, and optional hosted Cromwell/Aurora resources. The CLI defaults
+to the safe `synth` action. Explicit `--action deploy` deploys the stack and
+then waits for the default Batch queue to become `VALID`; if Cromwell is hosted,
+it also checks `/engine/v1/status`. `--dry-run` always runs synth, even if a
+different action was requested.
 
 ## Prerequisites
 
@@ -15,7 +16,8 @@ action was requested.
 - Node.js LTS, required by the CDK jsii runtime, and the AWS CDK v2 CLI
   compatible with the pinned `aws-cdk-lib` minor line in `pyproject.toml`.
 - An existing AWS VPC with at least two private subnets in distinct Availability
-  Zones is required for a future platform deployment; no VPC is created.
+  Zones is required; no VPC is created. Public hosted Cromwell additionally
+  requires at least two public subnets.
 - An AWS account/profile and region will be needed for deployment. Do not put
   credentials or account-specific secrets in `configuration.ini`.
 
@@ -55,25 +57,54 @@ calculated digest; alternatively, set an HTTPS `artifact_url` and the expected
 replacing the staged artifact. The user's 93-SNAPSHOT test JAR is not included
 in the repository or release defaults. Run `stage-cromwell-artifact --config
 configuration.ini --output /tmp/cromwell.jar` to stage and verify the configured
-JAR explicitly. This helper does not upload the JAR to S3.
-The supported actions are `synth` (default), `deploy`, and `destroy`; deploy and
-destroy remain unavailable for production use until platform infrastructure
-exists. A `DESTROY`
-removal policy requires `--confirm-destroy-data` for any action.
+JAR explicitly. This helper by itself does not upload the JAR to S3; hosted
+deployment packages and uploads the verified JAR plus complete asset manifest.
+For local/in-house AWS Batch changes, configure `artifact_path` to a JAR built
+from the sibling `cromwell_src` checkout and set `sha256` to that exact JAR's
+digest; the official release default does not include checkout-only behavior.
+The local-source build currently identifies as Cromwell 93-SNAPSHOT. Shared
+filesystem mounts and sized per-task local disks additionally require host
+provisioning beyond the current deployer; see [storage.md](storage.md).
+The supported actions are `synth` (default), `deploy`, and `destroy`. A
+`DESTROY` removal policy requires `--confirm-destroy-data` for any action.
+Successful deploy requires AWS credentials with CloudFormation/CDK permissions
+and `batch:DescribeJobQueues`; hosted Cromwell readiness also requires network
+reachability from the deployment client to its endpoint. Private endpoints
+must be checked from within the VPC or through an operator-managed connection.
+
+For AWS Batch workflows, set the `aws_batch_job_role_arn` workflow option to the
+stack output `BatchWorkflowJobRoleArn`. The local AWS Batch backend reads this
+from each submitted workflow's options; it is not a supported server-wide
+configuration default.
 
 Exit codes: `0` success, `2` invalid arguments or missing destructive
 confirmation, `3` invalid or missing configuration, `4` missing CDK
 prerequisite, and `5` CDK operation failure. Diagnostics are written to stderr
 and name the configuration key when applicable. See
 [configuration.md](configuration.md) for the supported keys and deterministic
-validation rules.
+validation rules, [architecture.md](architecture.md) for component/data flow,
+[security.md](security.md) for IAM and ingress constraints, and
+[observability.md](observability.md) for log retention and collection.
+
+## Post-deploy readiness
+
+After a successful CDK deploy, the CLI reads stack outputs, polls the default
+Batch queue until its status is `VALID`, and—when the stack exports
+`CromwellEndpoint`—requests `/engine/v1/status`. Each check has a bounded
+five-minute retry window. Batch API failures, missing output, invalid queue
+status, or Cromwell health timeout are reported as operation failures (exit
+code 5) with the failed component named. An internal endpoint cannot be
+reached from an operator workstation unless that client has VPC connectivity.
 
 ## Cost and teardown
 
-The artifact bucket is the current app's only provisioned resource. Batch,
-optional storage, database, and compute costs and the final teardown procedure
-remain unverified until the corresponding infrastructure tasks and isolated
-AWS validation are complete.
+Batch compute, ALB, Aurora Serverless ACUs, S3 storage/requests, KMS keys, and
+CloudWatch ingestion/retention contribute to cost. No live account deployment
+or destructive teardown has been run from this worktree. Confirm engine
+orderability for `db.serverless`, JDBC TLS behavior, subnet routing, IAM,
+quotas, and expected costs in a disposable account before production. The
+Aurora version is a candidate pin; synthesis alone does not establish regional
+availability.
 
 
 ## Artifact bucket

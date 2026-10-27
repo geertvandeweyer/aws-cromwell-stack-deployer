@@ -12,7 +12,10 @@ from cromwell_cdk.cli import (
     build_parser,
     execute,
     main,
+    _wait_for_batch_queue,
+    _wait_for_cromwell,
 )
+from cromwell_cdk.errors import DeployError
 from cromwell_cdk.tests.base import TestBase
 
 
@@ -62,8 +65,82 @@ class CliTests(TestBase):
             with self.subTest(action=action):
                 args = build_parser().parse_args(self.arguments("--action", action))
                 with patch("cromwell_cdk.cli._run_cdk") as run_cdk:
-                    self.assertEqual(execute(args), EXIT_SUCCESS)
+                    if action == "deploy":
+                        run_cdk.return_value = {
+                            "DefaultQueueName": "default-queue",
+                            "PriorityQueueName": "priority-queue",
+                        }
+                        with patch(
+                            "cromwell_cdk.cli._wait_for_batch_queue"
+                        ) as wait_queue:
+                            self.assertEqual(execute(args), EXIT_SUCCESS)
+                        self.assertEqual(wait_queue.call_count, 2)
+                        self.assertEqual(
+                            wait_queue.call_args_list[0].args,
+                            ("default-queue", "eu-west-1"),
+                        )
+                        self.assertEqual(
+                            wait_queue.call_args_list[1].args,
+                            ("priority-queue", "eu-west-1"),
+                        )
+                    else:
+                        self.assertEqual(execute(args), EXIT_SUCCESS)
                 run_cdk.assert_called_once_with(args, action)
+
+    @patch("cromwell_cdk.cli.time.sleep")
+    @patch("cromwell_cdk.cli.boto3.client")
+    def test_batch_readiness_polls_until_valid(self, client_factory, _sleep) -> None:
+        """Wait for an initializing queue to become VALID."""
+        client = client_factory.return_value
+        client.describe_job_queues.side_effect = [
+            {"jobQueues": [{"status": "ENABLED"}]},
+            {"jobQueues": [{"status": "VALID"}]},
+        ]
+        _wait_for_batch_queue("queue", "eu-west-1")
+        self.assertEqual(client.describe_job_queues.call_count, 2)
+
+    @patch("cromwell_cdk.cli.time.sleep")
+    @patch("cromwell_cdk.cli.boto3.client")
+    def test_batch_readiness_reports_invalid_queue(
+        self, client_factory, _sleep
+    ) -> None:
+        """Fail immediately with the queue's AWS status reason."""
+        client_factory.return_value.describe_job_queues.return_value = {
+            "jobQueues": [{"status": "INVALID", "statusReason": "bad CE"}]
+        }
+        with self.assertRaisesRegex(DeployError, "Batch queue.*INVALID.*bad CE"):
+            _wait_for_batch_queue("queue", "eu-west-1")
+
+    @patch("cromwell_cdk.cli.urlopen")
+    def test_cromwell_readiness_checks_engine_status(self, urlopen) -> None:
+        """Check the Cromwell engine status endpoint at the stack output URL."""
+        urlopen.return_value.__enter__.return_value.status = 200
+        _wait_for_cromwell("http://internal.example")
+        urlopen.assert_called_once_with(
+            "http://internal.example/engine/v1/status", timeout=10
+        )
+
+    @patch("cromwell_cdk.cli._wait_for_cromwell")
+    @patch("cromwell_cdk.cli._wait_for_batch_queue")
+    @patch(
+        "cromwell_cdk.cli._run_cdk",
+        return_value={
+            "DefaultQueueName": "queue",
+            "PriorityQueueName": "priority-queue",
+            "CromwellEndpoint": "https://cromwell.example",
+        },
+    )
+    def test_deploy_checks_queue_and_hosted_cromwell(
+        self, _run_cdk, wait_queue, wait_cromwell
+    ) -> None:
+        """Gate deploy success on both required hosted readiness checks."""
+        args = build_parser().parse_args(self.arguments("--action", "deploy"))
+        self.assertEqual(execute(args), EXIT_SUCCESS)
+        self.assertEqual(wait_queue.call_count, 2)
+        self.assertEqual(
+            wait_queue.call_args_list[1].args, ("priority-queue", "eu-west-1")
+        )
+        wait_cromwell.assert_called_once_with("https://cromwell.example")
 
     def test_default_action_synthesizes(self) -> None:
         """Synthesize by default when no action is selected."""

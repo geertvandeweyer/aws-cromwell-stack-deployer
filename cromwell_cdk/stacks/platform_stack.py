@@ -7,8 +7,16 @@ from constructs import Construct
 
 from cromwell_cdk.config import DeploymentConfig
 from cromwell_cdk.constructs.artifacts import ArtifactBucket
-from cromwell_cdk.constructs.iam import BatchRoles
+from cromwell_cdk.constructs.batch import (
+    BatchLaunchTemplate,
+    DefaultBatchCompute,
+    PriorityBatchCompute,
+)
+from cromwell_cdk.constructs.cromwell_host import CromwellHost
+from cromwell_cdk.constructs.database import MetadataDatabase
+from cromwell_cdk.constructs.iam import BatchRoles, CromwellServerRole
 from cromwell_cdk.constructs.network import BatchNetwork
+from cromwell_cdk.constructs.observability import PlatformLogs
 from cromwell_cdk.constructs.storage import DataBucket
 
 
@@ -58,9 +66,105 @@ class PlatformStack(Stack):
             data_bucket=self.data.bucket,
             additional_s3_grants=config.section("additional_s3_buckets"),
         )
+        self.logs = PlatformLogs(self, "Logs", config)
+        self.launch_template = BatchLaunchTemplate(
+            self,
+            "BatchLaunchTemplate",
+            artifact_bucket_name=self.artifacts.bucket.bucket_name,
+            namespace=config.get("deployment", "namespace"),
+        )
+
+        self.default_batch = DefaultBatchCompute(
+            self,
+            "DefaultBatch",
+            config=config,
+            network=self.network,
+            roles=self.iam,
+            launch_template=self.launch_template,
+        )
+        self.priority_batch = PriorityBatchCompute(
+            self,
+            "PriorityBatch",
+            config=config,
+            network=self.network,
+            roles=self.iam,
+            launch_template=self.launch_template,
+        )
         CfnOutput(
             self,
             "DataBucketName",
             value=self.data.bucket.bucket_name,
             description="Primary S3 bucket for workflow data",
         )
+        CfnOutput(
+            self,
+            "DefaultQueueName",
+            value=self.default_batch.job_queue.job_queue_name,
+            description="Default Spot AWS Batch job queue",
+        )
+        CfnOutput(
+            self,
+            "PriorityQueueName",
+            value=self.priority_batch.job_queue.job_queue_name,
+            description="Priority On-Demand AWS Batch job queue",
+        )
+        CfnOutput(
+            self,
+            "BatchWorkflowJobRoleArn",
+            value=self.iam.job_role.role_arn,
+            description=(
+                "Set this value as aws_batch_job_role_arn in submitted Cromwell workflow options."
+            ),
+        )
+        cromwell_config = config.section("cromwell")
+        database_config = config.section("database")
+        self.database = None
+        if database_config["hosted"]:
+            self.database = MetadataDatabase(
+                self,
+                "MetadataDatabase",
+                config=config,
+                vpc=self.network.vpc,
+            )
+            CfnOutput(
+                self,
+                "DatabaseSecretArn",
+                value=self.database.secret.secret_arn,
+                description="Generated Aurora metadata database credentials",
+            )
+        self.cromwell_role = None
+        self.cromwell = None
+        if cromwell_config["hosted"]:
+            self.cromwell_role = CromwellServerRole(
+                self,
+                "CromwellServerRole",
+                data_bucket=self.data.bucket,
+                artifact_bucket=self.artifacts.bucket,
+                default_queue_arn=self.default_batch.job_queue.job_queue_arn,
+                priority_queue_arn=self.priority_batch.job_queue.job_queue_arn,
+                batch_job_role_arn=self.iam.job_role.role_arn,
+                log_group_arn=self.logs.cromwell_server.log_group_arn,
+                database_secret=self.database.secret if self.database else None,
+            )
+            self.cromwell = CromwellHost(
+                self,
+                "CromwellHost",
+                config=config,
+                network=self.network,
+                role=self.cromwell_role,
+                database=self.database,
+                artifact_bucket=self.artifacts.bucket,
+                data_bucket=self.data.bucket,
+                server_log_group=self.logs.cromwell_server,
+                default_queue=self.default_batch.job_queue,
+                priority_queue=self.priority_batch.job_queue,
+            )
+            CfnOutput(
+                self,
+                "CromwellEndpoint",
+                value=(
+                    f"{'https' if config.get('access', 'public_access') else 'http'}://"
+                    f"{self.cromwell.load_balancer.load_balancer_dns_name}"
+                ),
+                description="Cromwell API endpoint",
+            )

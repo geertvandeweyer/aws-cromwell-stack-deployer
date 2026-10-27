@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Sequence
+from urllib.error import URLError
+from urllib.request import urlopen
+
+import boto3
 
 from cromwell_cdk.config import DeploymentConfig, load_config, validate_config
 from cromwell_cdk.errors import ConfigError, DeployError, PrereqError
@@ -20,6 +26,8 @@ EXIT_INVALID_ARGUMENTS = 2
 EXIT_CONFIGURATION = 3
 EXIT_PREREQUISITE = 4
 EXIT_OPERATION = 5
+_READINESS_ATTEMPTS = 30
+_READINESS_INTERVAL_SECONDS = 10
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -127,7 +135,7 @@ def _validate_destroy_confirmation(config: DeploymentConfig, confirmed: bool) ->
                 )
 
 
-def _run_cdk(args: argparse.Namespace, action: str) -> None:
+def _run_cdk(args: argparse.Namespace, action: str) -> dict[str, str]:
     """Run a CDK operation with safely separated arguments.
 
     Args:
@@ -209,6 +217,99 @@ def _run_cdk(args: argparse.Namespace, action: str) -> None:
         raise DeployError(
             f"CDK {action} failed with exit status {completed.returncode}{suffix}"
         )
+    if action != "deploy":
+        return {}
+    try:
+        outputs = subprocess.run(
+            [executable, "outputs", "--json", "CromwellPlatform"],
+            check=False,
+            cwd=project_root,
+            env=process_environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except OSError as exc:
+        raise PrereqError(f"Unable to read CDK deployment outputs: {exc}") from exc
+    if outputs.returncode != 0:
+        raise DeployError(
+            "Deployment readiness failed: unable to read required stack outputs"
+        )
+    try:
+        output_values = json.loads(outputs.stdout)
+    except json.JSONDecodeError as exc:
+        raise DeployError(
+            "Deployment readiness failed: unable to parse required stack outputs"
+        ) from exc
+    stack_outputs = output_values.get("CromwellPlatform", {})
+    if not isinstance(stack_outputs, dict):
+        raise DeployError(
+            "Deployment readiness failed: stack outputs have an unexpected format"
+        )
+    return {str(key): str(value) for key, value in stack_outputs.items()}
+
+
+def _wait_for_batch_queue(queue_name: str, region: str) -> None:
+    """Poll a deployed AWS Batch queue until its status is VALID.
+
+    Args:
+        queue_name: CloudFormation output queue name.
+        region: Target AWS region.
+
+    Raises:
+        DeployError: If the queue is invalid or readiness times out.
+    """
+    client = boto3.client("batch", region_name=region)
+    for attempt in range(_READINESS_ATTEMPTS):
+        try:
+            response = client.describe_job_queues(jobQueues=[queue_name])
+        except Exception as exc:  # boto3 surfaces service and credential errors here
+            raise DeployError(
+                f"Unable to check Batch queue {queue_name!r}: {exc}"
+            ) from exc
+        queues = response.get("jobQueues", [])
+        if not queues:
+            status = "NOT_FOUND"
+        else:
+            status = str(queues[0].get("status", "UNKNOWN"))
+        if status == "VALID":
+            return
+        if status in {"INVALID", "DELETED", "NOT_FOUND"}:
+            reason = queues[0].get("statusReason", "") if queues else ""
+            suffix = f": {reason}" if reason else ""
+            raise DeployError(f"Batch queue {queue_name!r} is {status}{suffix}")
+        if attempt + 1 < _READINESS_ATTEMPTS:
+            time.sleep(_READINESS_INTERVAL_SECONDS)
+    raise DeployError(
+        f"Batch queue {queue_name!r} did not become VALID within "
+        f"{_READINESS_ATTEMPTS * _READINESS_INTERVAL_SECONDS} seconds"
+    )
+
+
+def _wait_for_cromwell(endpoint: str) -> None:
+    """Poll Cromwell's engine status endpoint until HTTP 200.
+
+    Args:
+        endpoint: Hosted Cromwell endpoint from the stack output.
+
+    Raises:
+        DeployError: If the endpoint stays unavailable through the timeout.
+    """
+    health_url = endpoint.rstrip("/") + "/engine/v1/status"
+    last_error = "no response"
+    for attempt in range(_READINESS_ATTEMPTS):
+        try:
+            with urlopen(health_url, timeout=10) as response:
+                if response.status == 200:
+                    return
+                last_error = f"HTTP {response.status}"
+        except (OSError, URLError) as exc:
+            last_error = str(exc)
+        if attempt + 1 < _READINESS_ATTEMPTS:
+            time.sleep(_READINESS_INTERVAL_SECONDS)
+    raise DeployError(
+        f"Cromwell health endpoint {health_url} did not become ready: {last_error}"
+    )
 
 
 def execute(args: argparse.Namespace) -> int:
@@ -242,7 +343,18 @@ def execute(args: argparse.Namespace) -> int:
             print(str(exc), file=sys.stderr)
             return EXIT_INVALID_ARGUMENTS
         action = "synth" if args.dry_run else args.action
-        _run_cdk(args, action)
+        outputs = _run_cdk(args, action)
+        if action == "deploy":
+            for output_name in ("DefaultQueueName", "PriorityQueueName"):
+                queue_name = outputs.get(output_name)
+                if not queue_name:
+                    raise DeployError(
+                        f"Deployment readiness failed: missing output {output_name}"
+                    )
+                _wait_for_batch_queue(queue_name, args.region)
+            endpoint = outputs.get("CromwellEndpoint")
+            if endpoint:
+                _wait_for_cromwell(endpoint)
     except ConfigError as exc:
         diagnostic = " ".join(str(exc).splitlines())
         print(diagnostic, file=sys.stderr)

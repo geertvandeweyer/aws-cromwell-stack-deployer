@@ -4,7 +4,7 @@ set -Eeuo pipefail
 
 SCRIPT_DIR=${ASSET_DIRECTORY:-"$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"}
 
-for script in ecs-additions-common.sh ecs-additions-mountpoint-s3.sh ecs-additions-cromwell.sh; do
+for script in ecs-additions-common.sh ecs-additions-cromwell.sh; do
   path="${SCRIPT_DIR}/${script}"
   if [[ ! -f "$path" ]]; then
     printf 'ERROR: required provisioning asset is missing: %s\n' "$path" >&2
@@ -12,5 +12,7 @@ for script in ecs-additions-common.sh ecs-additions-mountpoint-s3.sh ecs-additio
   fi
   /usr/bin/env bash "$path"
 done
+
+printf 'Mountpoint S3 provisioning is not configured for this deployment; skipping optional mounts.\n'
 
 printf 'Batch worker provisioning completed successfully.\n'
