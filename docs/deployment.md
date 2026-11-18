@@ -3,7 +3,7 @@
 ## Current implementation status
 
 The repository contains the Python CDK entry point, the `deploy-cromwell` CLI,
-the existing-VPC network foundation, encrypted workflow/artifact buckets,
+the dedicated VPC/network foundation, encrypted workflow/artifact buckets,
 Batch queues, and optional hosted Cromwell/Aurora resources. The CLI defaults
 to the safe `synth` action. Explicit `--action deploy` deploys the stack and
 then waits for the default Batch queue to become `VALID`; if Cromwell is hosted,
@@ -15,9 +15,10 @@ different action was requested.
 - Python 3.12 or newer.
 - Node.js LTS, required by the CDK jsii runtime, and the AWS CDK v2 CLI
   compatible with the pinned `aws-cdk-lib` minor line in `pyproject.toml`.
-- An existing AWS VPC with at least two private subnets in distinct Availability
-  Zones is required; no VPC is created. Public hosted Cromwell additionally
-  requires at least two public subnets.
+- An AWS account/profile and region with at least two account-visible
+  Availability Zones; the default network uses three. The stack creates a VPC,
+  public/private subnets, one shared NAT gateway, and an S3 gateway endpoint.
+  Hosted Cromwell and its ALB remain opt-in.
 - An AWS account/profile and region will be needed for deployment. Do not put
   credentials or account-specific secrets in `configuration.ini`.
 
@@ -39,13 +40,14 @@ deploy-cromwell --region eu-west-1 --cromwell-root-bucket my-cromwell-root \
   --config configuration.ini --dry-run
 ```
 
-`--dry-run` validates local configuration, runs CDK synth without context
-lookups, and does not invoke deploy/destroy. The subnet/AZ lookup is therefore
-skipped when the VPC is not present in CDK context; synth reports the missing
-lookup prerequisite instead of making a live AWS read. To validate against
-previously cached context, provide the VPC lookup entry in CDK's standard
-`cdk.context.json` file. With cached VPC context, synthesis verifies the
-configured subnet membership and distinct AZs without AWS access.
+`--dry-run` validates local configuration and runs CDK synth without changing
+AWS resources. With an environment-bound stack, CDK uses region context to
+select account-visible Availability Zones; `availability_zones = max` selects
+all available zones. Configure `vpc_cidr` to avoid overlap with connected
+networks. A shared NAT gateway lowers fixed egress cost but can cause
+cross-AZ data charges and depends on its hosting AZ. Network and platform
+resources share one stack lifecycle; deleting the stack deletes the VPC and
+network resources.
 The artifact bucket blocks public access, enforces TLS, uses KMS encryption,
 enables versioning, and is retained by default. The staging helper verifies the
 configured Cromwell JAR and generates a `CHECKSUMS.sha256` manifest before

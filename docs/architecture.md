@@ -2,13 +2,17 @@
 
 ## Platform topology
 
-The CDK stack adopts an existing VPC and selected private subnets; it does not
-create a VPC. The default stack provisions:
+The CDK stack creates a dedicated VPC with public and private subnets in the
+configured Availability Zones. The default network provisions one shared NAT
+gateway for private-subnet egress and an S3 gateway endpoint. A shared NAT
+reduces fixed cost relative to one NAT per AZ, with a cross-AZ egress dependency
+and possible cross-AZ data charges. The default stack provisions:
 
 - A private, versioned, KMS-encrypted artifact bucket for reviewed bootstrap
   assets.
 - A primary workflow S3 bucket with public access blocked, TLS required,
   versioning, and configured retention.
+- A VPC, subnet routing, and a Batch security group.
 - A Batch service role and an EC2 instance role with access to the artifact,
   workflow, and explicitly configured additional S3 buckets.
 - A shared Batch launch template requiring IMDSv2 and encrypting the
@@ -42,6 +46,14 @@ A hosted database without a hosted Cromwell host is rejected unless
 `standalone_ok = true` is explicitly set. If Cromwell is hosted without Aurora,
 the packaged Cromwell configuration supplies its default metadata behavior;
 use Aurora when durable metadata is required.
+
+The VPC CIDR defaults to `10.0.0.0/16` and is configurable to avoid overlap
+with networks that may later connect. `availability_zones` defaults to `3`; set
+it to `2` or `max` to use all AZs available to the deploying account. The
+deployment requires at least two AZs. Flow logs are disabled by default. EFS
+remains an existing optional setting, but this stack does not provision EFS
+resources. Network and platform resources share one stack lifecycle, so
+deleting the stack deletes the VPC and its network resources.
 
 ## Workflow data flow
 

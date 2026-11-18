@@ -65,12 +65,11 @@ class ConfigPropertyTests(TestBase):
         """
         logging.getLogger(__name__).info("Hypothesis example CIDR=%r", cidr)
         example = (Path(__file__).parents[2] / "configuration.example.ini").read_text()
-        example = example.replace("public_access = false", "public_access = true", 1)
         example = example.replace("hosted = false", "hosted = true", 1)
         example = example.replace("allowed_cidrs =", f"allowed_cidrs = {cidr}", 1)
         example = example.replace(
             "tls_certificate_arn =",
-            "tls_certificate_arn = arn:aws:acm:us-east-1:123456789012:certificate/test",
+            "tls_certificate_arn = arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012",
             1,
         )
         path = Path(self.temp_dir) / "public.ini"

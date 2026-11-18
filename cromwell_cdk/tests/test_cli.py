@@ -342,20 +342,20 @@ class CliTests(TestBase):
 
     @patch("cromwell_cdk.cli.subprocess.run")
     @patch("cromwell_cdk.cli.shutil.which", return_value="/usr/bin/cdk")
-    def test_uncached_dry_run_vpc_lookup_maps_to_exit_four(
+    def test_uncached_region_context_maps_to_operation_error(
         self, _which: Mock, run: Mock
     ) -> None:
-        """Explain that dry-run cannot perform uncached AWS context lookups."""
+        """Report a CDK context failure as an operation error."""
         run.return_value = Mock(
             returncode=1,
             stderr="Cannot retrieve value from context provider vpc-provider",
             stdout="",
         )
         args = build_parser().parse_args(self.arguments("--dry-run"))
-        with patch("sys.stderr") as stderr:
-            self.assertEqual(execute(args), EXIT_PREREQUISITE)
-        diagnostic = "".join(call.args[0] for call in stderr.write.call_args_list)
-        self.assertIn("dry-run skipped AWS subnet/AZ checks", diagnostic)
+        with patch("cromwell_cdk.cli.logging.error") as log_error:
+            self.assertEqual(execute(args), EXIT_OPERATION)
+        diagnostic = log_error.call_args.args[1]
+        self.assertIn("context provider", diagnostic)
 
     @patch("cromwell_cdk.cli.subprocess.run")
     @patch("cromwell_cdk.cli.shutil.which", return_value="/usr/bin/cdk")

@@ -127,6 +127,8 @@ class CromwellArtifactSourceTests(TestBase):
                 "hosted = false": "hosted = true",
                 "artifact_path =": f"artifact_path = {self.source_path}",
                 "sha256 =": f"sha256 = {source_sha256}",
+                "allowed_cidrs =": "allowed_cidrs = 203.0.113.0/24",
+                "tls_certificate_arn =": "tls_certificate_arn = arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012",
             }
         )
         self.assertEqual(

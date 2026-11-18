@@ -11,7 +11,8 @@ from cromwell_cdk.config import load_config
 from cromwell_cdk.errors import ConfigError
 from cromwell_cdk.stacks.platform_stack import PlatformStack
 from cromwell_cdk.tests.base import TestBase
-from cromwell_cdk.tests.test_network import ACCOUNT, REGION, vpc_context
+ACCOUNT = "123456789012"
+REGION = "us-east-1"
 
 
 class ArtifactBucketTests(TestBase):
@@ -27,12 +28,12 @@ class ArtifactBucketTests(TestBase):
         self.config = load_config(self.config_path)
 
     def make_template(self) -> assertions.Template:
-        """Synthesize the platform stack using cached VPC lookup data.
+        """Synthesize the platform stack and its dedicated VPC.
 
         Returns:
             CloudFormation template assertions wrapper.
         """
-        app = cdk.App(context=vpc_context())
+        app = cdk.App()
         stack = PlatformStack(
             app,
             "CromwellPlatform",
@@ -110,7 +111,7 @@ class ArtifactBucketTests(TestBase):
             ).hexdigest()
             self.assertEqual(actual_digest, expected_digest, filename)
 
-        app = cdk.App(context=vpc_context())
+        app = cdk.App()
         stack = PlatformStack(
             app,
             "CromwellPlatform",
@@ -197,7 +198,7 @@ class ArtifactBucketTests(TestBase):
                 asset_path = prepare_artifact_assets(
                     self.config, Path(self.temp_dir) / "rejected-assets"
                 )
-                app = cdk.App(context=vpc_context())
+                app = cdk.App()
                 PlatformStack(
                     app,
                     "CromwellPlatform",

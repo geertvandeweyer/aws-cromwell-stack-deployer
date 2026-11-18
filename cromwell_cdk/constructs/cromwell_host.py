@@ -32,7 +32,7 @@ class CromwellHost(Construct):
         scope: Parent construct.
         construct_id: Stable construct identifier.
         config: Validated deployment configuration.
-        network: Existing VPC and configured private subnet IDs.
+        network: Dedicated VPC and its private subnet selections.
         role: Least-privilege Cromwell host role.
         database: Optional cluster with connection endpoint and secret.
         artifact_bucket: Bucket containing checksum-verified deployment assets.

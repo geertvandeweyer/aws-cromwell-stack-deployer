@@ -19,48 +19,6 @@ from cromwell_cdk.tests.base import TestBase
 
 ACCOUNT = "123456789012"
 REGION = "us-east-1"
-VPC_ID = "vpc-0123456789abcdef0"
-SUBNET_A = "subnet-aaaaaaaa"
-SUBNET_B = "subnet-bbbbbbbb"
-
-
-def vpc_context() -> dict[str, object]:
-    """Return cached CDK lookup data for two private Batch subnets.
-
-    Returns:
-        VPC provider context accepted by ``Vpc.from_lookup``.
-    """
-    context_key = (
-        f"vpc-provider:account={ACCOUNT}:filter.vpc-id={VPC_ID}:region={REGION}"
-        ":returnAsymmetricSubnets=true"
-    )
-    return {
-        context_key: {
-            "vpcId": VPC_ID,
-            "vpcCidrBlock": "10.0.0.0/16",
-            "availabilityZones": ["us-east-1a", "us-east-1b"],
-            "subnetGroups": [
-                {
-                    "name": "Private",
-                    "type": "Private",
-                    "subnets": [
-                        {
-                            "subnetId": SUBNET_A,
-                            "availabilityZone": "us-east-1a",
-                            "routeTableId": "rtb-0123456789abcdef0",
-                        },
-                        {
-                            "subnetId": SUBNET_B,
-                            "availabilityZone": "us-east-1b",
-                            "routeTableId": "rtb-1123456789abcdef0",
-                        },
-                    ],
-                },
-            ],
-        }
-    }
-
-
 class BatchLaunchTemplateTests(TestBase):
     """Verify AMI-neutral, encrypted, IMDSv2 launch-template settings."""
 
@@ -166,7 +124,7 @@ class BatchLaunchTemplateTests(TestBase):
         config_path.write_text(config_text)
         config = load_config(config_path)
 
-        app = cdk.App(context=vpc_context())
+        app = cdk.App()
         stack = cdk.Stack(
             app, "DefaultBatchComputeTest", env={"account": ACCOUNT, "region": REGION}
         )
@@ -213,7 +171,7 @@ class BatchLaunchTemplateTests(TestBase):
                     "MaxvCpus": 256,
                     "InstanceTypes": ["m5.large", "m5.xlarge"],
                     "BidPercentage": 100,
-                    "Subnets": [SUBNET_A, SUBNET_B],
+                    "Subnets": assertions.Match.any_value(),
                     "SecurityGroupIds": [assertions.Match.any_value()],
                     "LaunchTemplate": assertions.Match.any_value(),
                 },
@@ -227,6 +185,13 @@ class BatchLaunchTemplateTests(TestBase):
                 for resource in resources.values()
                 if resource["Properties"]["ComputeResources"]["Type"] == "SPOT"
             )
+        )
+        configured_subnets = default_environment["Properties"]["ComputeResources"][
+            "Subnets"
+        ]
+        self.assertEqual(len(configured_subnets), 3)
+        self.assertTrue(
+            all("Private" in str(subnet_ref) for subnet_ref in configured_subnets)
         )
         rendered = str(resources)
         self.assertIn("ECS_AL2023", rendered)

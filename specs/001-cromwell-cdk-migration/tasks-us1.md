@@ -37,7 +37,7 @@ production use.
       exported priority queue ARN.
 - Aurora is optional for hosted Cromwell; with Aurora disabled Cromwell uses
       its packaged metadata configuration. Durable metadata requires Aurora.
-- Public ALB subnet readiness is validated from VPC lookup context; ensure the
-  operator's public subnet routing and internet gateway are configured.
+- The stack creates public subnets and internet routing; public ALB access
+      requires at least two public subnets in distinct Availability Zones.
 - The CDK synthesis and unit tests do not prove regional service availability
   or successful live AWS deployment.
