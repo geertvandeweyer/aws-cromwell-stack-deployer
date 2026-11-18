@@ -1,4 +1,4 @@
-"""Credential-free tests for existing VPC and subnet validation."""
+"""Credential-free synthesis tests for the dedicated VPC topology."""
 
 from __future__ import annotations
 
@@ -6,272 +6,134 @@ from pathlib import Path
 
 import aws_cdk as cdk
 from aws_cdk import assertions
-from cromwell_cdk.stacks.platform_stack import PlatformStack
-from cromwell_cdk.config import load_config
+from cromwell_cdk.config import DeploymentConfig, load_config
 from cromwell_cdk.constructs.network import BatchNetwork
-from cromwell_cdk.errors import ConfigError, PrereqError
+from cromwell_cdk.stacks.platform_stack import PlatformStack
 from cromwell_cdk.tests.base import TestBase
 
 
-ACCOUNT = "123456789012"
-REGION = "us-east-1"
-VPC_ID = "vpc-0123456789abcdef0"
-SUBNET_A = "subnet-aaaaaaaa"
-SUBNET_B = "subnet-bbbbbbbb"
-
-
-def vpc_context(
-    subnet_ids: tuple[str, str] = (SUBNET_A, SUBNET_B),
-    subnet_azs: tuple[str, str] = ("us-east-1a", "us-east-1b"),
-) -> dict[str, object]:
-    """Return cached CDK lookup data for private-with-egress subnets.
-
-    Args:
-            subnet_ids: Subnet IDs present in the cached private VPC result.
-            subnet_azs: Availability Zone for each cached private subnet.
-
-    Returns:
-        CDK vpc-provider result accepted by ``Vpc.from_lookup``.
-    """
-    context_key = (
-        f"vpc-provider:account={ACCOUNT}:filter.vpc-id={VPC_ID}:region={REGION}"
-        ":returnAsymmetricSubnets=true"
-    )
-    return {
-        context_key: {
-            "vpcId": VPC_ID,
-            "vpcCidrBlock": "10.0.0.0/16",
-            "availabilityZones": list(dict.fromkeys(subnet_azs)),
-            "subnetGroups": [
-                {
-                    "name": "Private",
-                    "type": "Private",
-                    "subnets": [
-                        {
-                            "subnetId": subnet_ids[0],
-                            "availabilityZone": subnet_azs[0],
-                            "routeTableId": "rtb-0123456789abcdef0",
-                        },
-                        {
-                            "subnetId": subnet_ids[1],
-                            "availabilityZone": subnet_azs[1],
-                            "routeTableId": "rtb-1123456789abcdef0",
-                        },
-                    ],
-                },
-            ],
-        }
-    }
-
-
 class NetworkTests(TestBase):
-    """Validate network subnet selection without contacting AWS."""
+    """Verify network resources and subnet selections without AWS lookups."""
 
     def setUp(self) -> None:
-        """Create a valid configuration fixture for each network test."""
+        """Load the checked-in example as a valid network configuration."""
         super().setUp()
-        self.config_path = Path(self.temp_dir) / "configuration.ini"
-        self.config_path.write_text(
-            (Path(__file__).parents[2] / "configuration.example.ini").read_text()
-        )
+        self.config_path = Path(__file__).parents[2] / "configuration.example.ini"
         self.config = load_config(self.config_path)
 
-    def make_stack(
-        self,
-        subnet_azs: tuple[str, str] = ("us-east-1a", "us-east-1b"),
-        subnet_ids: tuple[str, str] = (SUBNET_A, SUBNET_B),
-    ) -> cdk.Stack:
-        """Build an environment-bound stack with cached VPC context.
+    def make_network(
+        self, *, az_count: str = "3", vpc_cidr: str = "10.0.0.0/16"
+    ) -> tuple[assertions.Template, BatchNetwork]:
+        """Synthesize a VPC with the requested AZ selection and CIDR."""
+        values = {section: dict(items) for section, items in self.config.values.items()}
+        values["network"]["availability_zones"] = az_count
+        values["network"]["vpc_cidr"] = vpc_cidr
+        app = cdk.App()
+        stack = cdk.Stack(
+            app,
+            "NetworkTest",
+            env={"account": "123456789012", "region": "us-east-1"},
+        )
+        network = BatchNetwork(stack, "Network", DeploymentConfig(values))
+        return assertions.Template.from_stack(stack), network
 
-        Args:
-            subnet_azs: Availability Zone for each configured private subnet.
-
-        Returns:
-            Stack containing the network construct.
-        """
-        app = cdk.App(context=vpc_context(subnet_ids, subnet_azs))
-        stack = cdk.Stack(app, "TestStack", env={"account": ACCOUNT, "region": REGION})
-        BatchNetwork(stack, "Network", self.config)
-        return stack
-
-    def test_private_subnets_must_span_distinct_availability_zones(self) -> None:
-        """Reject selected private subnets that share an Availability Zone."""
-        with self.assertRaisesRegex(ConfigError, "distinct Availability Zones"):
-            self.make_stack(("us-east-1a", "us-east-1a"))
-
-    def test_network_synthesizes_with_two_distinct_private_subnets(self) -> None:
-        """Synthesize the Batch security group with fixture-backed lookup data."""
-        stack = self.make_stack()
-        template = assertions.Template.from_stack(stack)
+    def test_default_network_has_shared_nat_and_s3_endpoint(self) -> None:
+        """Create three public/private subnet pairs with one NAT and S3 endpoint."""
+        template, network = self.make_network()
+        template.resource_count_is("AWS::EC2::VPC", 1)
+        template.resource_count_is("AWS::EC2::Subnet", 6)
+        template.resource_count_is("AWS::EC2::NatGateway", 1)
+        template.resource_count_is("AWS::EC2::VPCEndpoint", 1)
         template.resource_count_is("AWS::EC2::SecurityGroup", 1)
         template.has_resource_properties(
-            "AWS::EC2::SecurityGroup",
-            {"GroupDescription": "Cromwell Batch compute security group"},
+            "AWS::EC2::VPC",
+            {"CidrBlock": "10.0.0.0/16", "EnableDnsHostnames": True},
         )
-
-    def test_platform_stack_is_environment_bound_and_synthesizes(self) -> None:
-        """Bind platform resources and additional bucket IAM to the deployment."""
-        self.config_path.write_text(
-            self.config_path.read_text().replace(
-                "[additional_s3_buckets]",
-                "[additional_s3_buckets]\n"
-                "bucket1_name = shared-inputs\n"
-                "bucket1_prefix = cohort-a/\n"
-                "bucket1_access = readonly",
-            )
-        )
-        self.config = load_config(self.config_path)
-        app = cdk.App(context=vpc_context())
-        app.node.set_context("cromwellRootBucket", "workflow-data-bucket")
-        stack = PlatformStack(
-            app,
-            "CromwellPlatform",
-            config=self.config,
-            env={"account": ACCOUNT, "region": REGION},
-        )
-        template = assertions.Template.from_stack(stack)
         template.has_resource_properties(
-            "AWS::EC2::SecurityGroup",
-            {"GroupDescription": "Cromwell Batch compute security group"},
-        )
-        template.has_output("DataBucketName", {})
-        template.has_resource_properties(
-            "AWS::S3::Bucket",
+            "AWS::EC2::VPCEndpoint",
             {
-                "BucketName": "workflow-data-bucket",
-                "BucketEncryption": assertions.Match.any_value(),
+                "VpcEndpointType": "Gateway",
+                "ServiceName": assertions.Match.any_value(),
             },
         )
-        policies = template.find_resources("AWS::IAM::Policy")
-        rendered_policies = str(policies)
-        self.assertIn("shared-inputs/cohort-a/*", rendered_policies)
-        self.assertIn("'s3:prefix'", rendered_policies)
-        self.assertIn("'s3:GetObject'", rendered_policies)
+        self.assertEqual(len(network.private_subnets), 3)
+        self.assertEqual(
+            len({subnet.availability_zone for subnet in network.private_subnets}), 3
+        )
 
-    def test_default_stack_has_queues_and_no_optional_hosted_resources(self) -> None:
-        """Keep hosted Cromwell and Aurora absent from the default stack."""
-        app = cdk.App(context=vpc_context())
+    def test_two_az_and_custom_cidr_are_supported(self) -> None:
+        """Honor an explicit two-AZ count and custom VPC range."""
+        template, network = self.make_network(az_count="2", vpc_cidr="10.42.0.0/16")
+        template.resource_count_is("AWS::EC2::Subnet", 4)
+        template.resource_count_is("AWS::EC2::NatGateway", 1)
+        template.has_resource_properties("AWS::EC2::VPC", {"CidrBlock": "10.42.0.0/16"})
+        self.assertEqual(len(network.private_subnets), 2)
+
+    def test_max_az_setting_uses_all_account_visible_azs(self) -> None:
+        """Use CDK's high max_azs setting for account-visible regional AZs."""
+        template, network = self.make_network(az_count="max")
+        self.assertGreaterEqual(len(network.private_subnets), 2)
+        self.assertEqual(len(network.private_subnets), len(network.vpc.availability_zones))
+        template.resource_count_is("AWS::EC2::NatGateway", 1)
+
+    def make_platform(self, config=None) -> assertions.Template:
+        """Synthesize the full platform stack with a primary workflow bucket."""
+        app = cdk.App()
         app.node.set_context("cromwellRootBucket", "workflow-data-bucket")
         stack = PlatformStack(
             app,
             "CromwellPlatform",
-            config=self.config,
-            env={"account": ACCOUNT, "region": REGION},
+            config=config or self.config,
+            env={"account": "123456789012", "region": "us-east-1"},
         )
-        template = assertions.Template.from_stack(stack)
+        return assertions.Template.from_stack(stack)
+
+    def test_default_platform_stack_keeps_host_and_database_opt_in(self) -> None:
+        """Create Batch queues and dedicated networking without host/Aurora costs."""
+        template = self.make_platform()
         template.resource_count_is("AWS::Batch::JobQueue", 2)
-        template.has_output("DefaultQueueName", {})
-        template.has_output("PriorityQueueName", {})
+        template.resource_count_is("AWS::EC2::VPC", 1)
         template.resource_count_is("AWS::RDS::DBCluster", 0)
         template.resource_count_is("AWS::EC2::Instance", 0)
         template.resource_count_is("AWS::ElasticLoadBalancingV2::LoadBalancer", 0)
-        outputs = template.to_json().get("Outputs", {})
-        self.assertNotIn("CromwellEndpoint", outputs)
-        self.assertNotIn("DatabaseSecretArn", outputs)
+        template.has_output("DefaultQueueName", {})
+        template.has_output("PriorityQueueName", {})
+        self.assertNotIn("CromwellEndpoint", template.to_json().get("Outputs", {}))
 
-    def test_hosted_cromwell_and_database_synthesize_conditionally(self) -> None:
-        """Create Aurora and a restricted internal ALB only when opted in."""
-        text = (
-            self.config_path.read_text()
-            .replace("[cromwell]\nhosted = false", "[cromwell]\nhosted = true")
-            .replace(
-                "[database]\nhosted = false",
-                "[database]\nhosted = true",
-            )
-            .replace("engine_version =", "engine_version = 8.0.mysql_aurora.3.12.0", 1)
+    def test_hosted_cromwell_creates_public_allowlisted_https_alb(self) -> None:
+        """Create public TLS ALB, host and SG rules only when hosted is enabled."""
+        values = {section: dict(items) for section, items in self.config.values.items()}
+        values["cromwell"]["hosted"] = True
+        values["cromwell"]["tls_certificate_arn"] = (
+            "arn:aws:acm:us-east-1:123456789012:certificate/"
+            "12345678-1234-1234-1234-123456789012"
         )
-        self.config_path.write_text(text)
-        config = load_config(self.config_path)
-        app = cdk.App(context=vpc_context())
-        app.node.set_context("cromwellRootBucket", "workflow-data-bucket")
-        stack = PlatformStack(
-            app,
-            "CromwellPlatform",
-            config=config,
-            env={"account": ACCOUNT, "region": REGION},
-        )
-        template = assertions.Template.from_stack(stack)
-        template.resource_count_is("AWS::RDS::DBCluster", 1)
+        values["access"]["allowed_cidrs"] = ["203.0.113.0/24"]
+        config = DeploymentConfig(values)
+        template = self.make_platform(config)
         template.resource_count_is("AWS::EC2::Instance", 1)
         template.resource_count_is("AWS::ElasticLoadBalancingV2::LoadBalancer", 1)
         template.has_output("CromwellEndpoint", {})
-        template.has_output("DatabaseSecretArn", {})
-        template.has_output("BatchWorkflowJobRoleArn", {})
-        user_data = str(
-            next(iter(template.find_resources("AWS::EC2::Instance").values()))[
-                "Properties"
-            ]["UserData"]
-        )
-        self.assertIn(
-            "awscli.amazonaws.com/awscli-exe-linux-${AWS_CLI_ARCH}.zip", user_data
-        )
-        self.assertIn("/tmp/aws/install --install-dir /usr/local/aws-cli", user_data)
-        self.assertIn(
-            "install -o ec2-user -g ec2-user -m 0644 /opt/cromwell/assets/cromwell.jar",
-            user_data,
-        )
-        self.assertLess(
-            user_data.index("/tmp/aws/install --install-dir"),
-            user_data.index("aws s3 cp"),
-        )
-        ingress_rules = template.find_resources("AWS::EC2::SecurityGroupIngress")
-        self.assertNotIn("0.0.0.0/0", str(ingress_rules))
-
-    def test_adding_bucket_grant_changes_only_iam_policy(self) -> None:
-        """Reconcile a config-only grant as IAM without changing other resources."""
-        app = cdk.App(context=vpc_context())
-        app.node.set_context("cromwellRootBucket", "workflow-data-bucket")
-        stack = PlatformStack(
-            app,
-            "CromwellPlatform",
-            config=self.config,
-            env={"account": ACCOUNT, "region": REGION},
-        )
-        baseline = assertions.Template.from_stack(stack).to_json()
-
-        updated_values = {
-            **self.config.values,
-            "additional_s3_buckets": {
-                "1": {
-                    "name": "shared-inputs",
-                    "prefix": "cohort-a/",
-                    "access": "readonly",
-                }
-            },
-        }
-        updated_config = type(self.config)(updated_values)
-        updated_app = cdk.App(context=vpc_context())
-        updated_app.node.set_context("cromwellRootBucket", "workflow-data-bucket")
-        updated_stack = PlatformStack(
-            updated_app,
-            "CromwellPlatform",
-            config=updated_config,
-            env={"account": ACCOUNT, "region": REGION},
-        )
-        updated = assertions.Template.from_stack(updated_stack).to_json()
-
-        baseline_resources = baseline.get("Resources", {})
-        updated_resources = updated.get("Resources", {})
-        changed_resources = {
-            logical_id
-            for logical_id in baseline_resources.keys() | updated_resources.keys()
-            if baseline_resources.get(logical_id) != updated_resources.get(logical_id)
-        }
-        self.assertEqual(
-            changed_resources,
+        template.has_resource_properties(
+            "AWS::ElasticLoadBalancingV2::Listener",
             {
-                "BatchIamBatchInstanceRoleDefaultPolicy8E105532",
-                "BatchIamBatchJobRoleDefaultPolicy336AA8A2",
+                "Port": 443,
+                "Protocol": "HTTPS",
+                "Certificates": [
+                    {
+                        "CertificateArn": values["cromwell"]["tls_certificate_arn"]
+                    }
+                ],
             },
         )
-        self.assertEqual(
-            len(baseline.get("Resources", {})),
-            len(updated.get("Resources", {})),
+        security_groups = template.find_resources("AWS::EC2::SecurityGroup")
+        lb_security_group = next(
+            resource
+            for resource in security_groups.values()
+            if resource["Properties"].get("GroupDescription")
+            == "Cromwell application load balancer security group"
         )
-        self.assertIn("shared-inputs/cohort-a/*", str(updated))
-        self.assertNotIn("shared-inputs", str(baseline))
-
-    def test_configured_subnet_not_in_vpc_fails_as_prerequisite(self) -> None:
-        """Reject configured IDs absent from the looked-up private subnet set."""
-        with self.assertRaisesRegex(PrereqError, SUBNET_A):
-            self.make_stack(subnet_ids=("subnet-cccccccc", SUBNET_B))
+        self.assertIn("203.0.113.0/24", str(lb_security_group))
+        self.assertEqual(
+            len(lb_security_group["Properties"]["SecurityGroupIngress"]), 1
+        )

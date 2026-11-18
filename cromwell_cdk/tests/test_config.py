@@ -57,7 +57,7 @@ class ConfigTests(TestBase):
 
     def test_invalid_boolean_names_key(self) -> None:
         """Reject malformed booleans with their section and key."""
-        self.write_config({"public_access = false": "public_access = perhaps"})
+        self.write_config({"public_access = true": "public_access = perhaps"})
         with self.assertRaisesRegex(ConfigError, r"\[access\] public_access"):
             load_config(self.config_path)
 
@@ -68,7 +68,7 @@ class ConfigTests(TestBase):
         ):
             self.write_config()
             text = self.config_path.read_text().replace(
-                "public_access = false", "public_access = false\ntypo = ignored"
+                "public_access = true", "public_access = true\ntypo = ignored"
             )
             self.config_path.write_text(text)
             load_config(self.config_path)
@@ -90,20 +90,44 @@ class ConfigTests(TestBase):
         with self.assertRaisesRegex(ConfigError, r"\[deployment\] namespace"):
             validate_config(load_config(self.config_path))
 
-    def test_duplicate_or_missing_private_subnets_are_rejected(self) -> None:
-        """Require two distinct, syntactically valid private subnet IDs."""
+    def test_network_cidr_is_configurable_and_validated(self) -> None:
+        """Accept an alternate CIDR and reject invalid or undersized networks."""
+        self.write_config({"vpc_cidr = 10.0.0.0/16": "vpc_cidr = 10.42.0.0/16"})
+        config = load_config(self.config_path)
+        validate_config(config)
+        self.assertEqual(config.get("network", "vpc_cidr"), "10.42.0.0/16")
+
+        for value in ("10.0.0.1/16", "10.0.0.0/19", "2001:db8::/48"):
+            with self.subTest(value=value):
+                self.write_config({"vpc_cidr = 10.0.0.0/16": f"vpc_cidr = {value}"})
+                with self.assertRaisesRegex(ConfigError, r"\[network\] vpc_cidr"):
+                    validate_config(load_config(self.config_path))
+
+    def test_availability_zone_setting_accepts_three_or_max(self) -> None:
+        """Allow the default three AZs or all AZs available to the account."""
         self.write_config(
-            {
-                "private_subnet_ids = subnet-aaaaaaaa, subnet-bbbbbbbb": "private_subnet_ids = subnet-aaaaaaaa, subnet-aaaaaaaa"
-            }
+            {"availability_zones = 3": "availability_zones = max"}
         )
-        with self.assertRaisesRegex(ConfigError, "at least two distinct"):
-            validate_config(load_config(self.config_path))
+        validate_config(load_config(self.config_path))
+        for value in ("1", "4", "auto"):
+            with self.subTest(value=value):
+                self.write_config(
+                    {"availability_zones = 3": f"availability_zones = {value}"}
+                )
+                with self.assertRaisesRegex(
+                    ConfigError, r"\[network\] availability_zones"
+                ):
+                    validate_config(load_config(self.config_path))
 
     def test_hosted_latest_cromwell_is_rejected(self) -> None:
         """Require an immutable Cromwell release when hosting it."""
         self.write_config(
-            {"hosted = false": "hosted = true", "version = 92": "version = latest"}
+            {
+                "hosted = false": "hosted = true",
+                "version = 92": "version = latest",
+                "allowed_cidrs =": "allowed_cidrs = 203.0.113.0/24",
+                "tls_certificate_arn =": "tls_certificate_arn = arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012",
+            }
         )
         with self.assertRaisesRegex(ConfigError, r"\[cromwell\] version"):
             validate_config(load_config(self.config_path))
@@ -117,7 +141,12 @@ class ConfigTests(TestBase):
     def test_non_default_cromwell_version_requires_an_artifact_override(self) -> None:
         """Prevent changing the release label without changing its artifact."""
         self.write_config(
-            {"hosted = false": "hosted = true", "version = 92": "version = 93"}
+            {
+                "hosted = false": "hosted = true",
+                "version = 92": "version = 93",
+                "allowed_cidrs =": "allowed_cidrs = 203.0.113.0/24",
+                "tls_certificate_arn =": "tls_certificate_arn = arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012",
+            }
         )
         with self.assertRaisesRegex(ConfigError, r"non-default releases require"):
             validate_config(load_config(self.config_path))
@@ -149,11 +178,22 @@ class ConfigTests(TestBase):
         """Require CIDR allowlisting and TLS for public hosted Cromwell."""
         self.write_config(
             {
-                "public_access = false": "public_access = true",
                 "hosted = false": "hosted = true",
             }
         )
         with self.assertRaisesRegex(ConfigError, r"\[access\] allowed_cidrs"):
+            validate_config(load_config(self.config_path))
+
+    def test_public_access_requires_an_acm_certificate_arn(self) -> None:
+        """Reject malformed certificates when public hosted access is enabled."""
+        self.write_config(
+            {
+                "allowed_cidrs =": "allowed_cidrs = 203.0.113.0/24",
+                "hosted = false": "hosted = true",
+                "tls_certificate_arn =": "tls_certificate_arn = not-an-arn",
+            }
+        )
+        with self.assertRaisesRegex(ConfigError, r"\[cromwell\] tls_certificate_arn"):
             validate_config(load_config(self.config_path))
 
     def test_database_acu_range_and_standalone_guard(self) -> None:
@@ -200,9 +240,9 @@ class ConfigTests(TestBase):
         """Prevent a public endpoint allowlist from becoming world-open."""
         self.write_config(
             {
-                "public_access = false": "public_access = true",
                 "allowed_cidrs =": "allowed_cidrs = 0.0.0.0/0",
                 "hosted = false": "hosted = true",
+                "tls_certificate_arn =": "tls_certificate_arn = arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012",
             }
         )
         with self.assertRaisesRegex(ConfigError, "unrestricted CIDR"):

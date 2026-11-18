@@ -21,7 +21,7 @@ if config_path:
     region = os.environ.get("CDK_DEFAULT_REGION")
     if not account:
         raise PrereqError(
-            "Required prerequisite missing: AWS account could not be resolved for the VPC lookup"
+            "Required prerequisite missing: AWS account could not be resolved for the environment-bound deployment"
         )
     if not region:
         raise ConfigError("Missing required deployment region for the VPC lookup")

@@ -1,7 +1,7 @@
 """Load and validate the deployment's single INI configuration contract.
 
-The loader is deliberately local-only: AWS resource existence and subnet/AZ
-lookups belong to synthesis/deployment validation where cloud context exists.
+The loader is deliberately local-only; network resources are created during
+synthesis, where the target account and region provide Availability Zone data.
 """
 
 from __future__ import annotations
@@ -124,8 +124,8 @@ def _defaults() -> dict[str, dict[str, Any]]:
         "deployment": {
             "namespace": "",
         },
-        "network": {"vpc_id": "", "private_subnet_ids": []},
-        "access": {"public_access": False, "allowed_cidrs": []},
+        "network": {"vpc_cidr": "10.0.0.0/16", "availability_zones": "3"},
+        "access": {"public_access": True, "allowed_cidrs": []},
         "storage": {
             "existing_bucket": False,
             "removal_policy": "RETAIN",
@@ -303,32 +303,54 @@ def validate_config(config: DeploymentConfig) -> None:
             "digits, or hyphens"
         )
 
-    vpc_id = config.get("network", "vpc_id")
-    if not re.fullmatch(r"vpc-[0-9a-fA-F]{8,17}", vpc_id):
-        raise ConfigError("Invalid [network] vpc_id: expected a VPC identifier")
-    subnet_ids = config.get("network", "private_subnet_ids")
-    if len(subnet_ids) < 2 or len(set(subnet_ids)) != len(subnet_ids):
+    network = config.section("network")
+    try:
+        vpc_network = ipaddress.ip_network(network["vpc_cidr"], strict=True)
+    except ValueError as exc:
         raise ConfigError(
-            "Invalid [network] private_subnet_ids: at least two distinct subnet IDs are required"
+            "Invalid [network] vpc_cidr: expected an IPv4 network CIDR"
+        ) from exc
+    if vpc_network.version != 4 or not 16 <= vpc_network.prefixlen <= 18:
+        raise ConfigError(
+            "Invalid [network] vpc_cidr: use an IPv4 CIDR between /16 and /18 "
+            "to provide sufficient subnet space"
         )
-    if any(not re.fullmatch(r"subnet-[0-9a-fA-F]{8,17}", item) for item in subnet_ids):
-        raise ConfigError("Invalid [network] private_subnet_ids: malformed subnet ID")
+    az_count = str(network["availability_zones"]).lower()
+    if az_count != "max":
+        try:
+            parsed_az_count = int(az_count)
+        except ValueError as exc:
+            raise ConfigError(
+                "Invalid [network] availability_zones: expected 2, 3, or max"
+            ) from exc
+        if parsed_az_count not in {2, 3}:
+            raise ConfigError(
+                "Invalid [network] availability_zones: expected 2, 3, or max"
+            )
 
     access = config.section("access")
     cromwell = config.section("cromwell")
-    if access["public_access"]:
+    if cromwell["hosted"]:
+        if not access["public_access"]:
+            raise ConfigError(
+                "Invalid [access] public_access: hosted Cromwell requires public HTTPS access"
+            )
         if not access["allowed_cidrs"]:
             raise ConfigError(
-                "Invalid [access] allowed_cidrs: required for public access"
+                "Invalid [access] allowed_cidrs: required for hosted public access"
             )
         _validate_cidrs(access["allowed_cidrs"], "[access] allowed_cidrs")
-        if not cromwell["hosted"]:
-            raise ConfigError(
-                "Invalid [access] public_access: requires [cromwell] hosted = true"
-            )
         if not cromwell["tls_certificate_arn"]:
             raise ConfigError(
-                "Invalid [cromwell] tls_certificate_arn: required for public access"
+                "Invalid [cromwell] tls_certificate_arn: required for hosted public access"
+            )
+        if not re.fullmatch(
+            r"arn:aws(-[a-z]+)?:acm:[a-z0-9-]+:\d{12}:certificate/"
+            r"[0-9a-fA-F-]{36}",
+            cromwell["tls_certificate_arn"],
+        ):
+            raise ConfigError(
+                "Invalid [cromwell] tls_certificate_arn: expected an ACM certificate ARN"
             )
     elif access["allowed_cidrs"]:
         _validate_cidrs(access["allowed_cidrs"], "[access] allowed_cidrs")

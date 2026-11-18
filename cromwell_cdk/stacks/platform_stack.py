@@ -27,7 +27,7 @@ class PlatformStack(Stack):
         scope: Parent construct.
         construct_id: Stable stack identifier.
         config: Validated deployment configuration.
-        env: Concrete target account and region used by VPC lookup.
+        env: Concrete target account and region used for AZ selection.
     """
 
     def __init__(

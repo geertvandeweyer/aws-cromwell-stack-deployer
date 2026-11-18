@@ -1,4 +1,4 @@
-"""Existing-network lookup and Batch security group construction."""
+"""Dedicated VPC, subnet, endpoint, and Batch security group construction."""
 
 from __future__ import annotations
 
@@ -6,11 +6,8 @@ from aws_cdk import aws_ec2 as ec2
 from constructs import Construct
 
 from cromwell_cdk.config import DeploymentConfig
-from cromwell_cdk.errors import ConfigError, PrereqError
-
-
 class BatchNetwork(Construct):
-    """Look up the configured VPC and create its default Batch security group.
+    """Create a dedicated VPC with public/private subnets and shared egress.
 
     Args:
         scope: Parent construct.
@@ -18,42 +15,44 @@ class BatchNetwork(Construct):
         config: Validated deployment configuration.
 
     Raises:
-        ConfigError: If configured private subnets are absent or not in distinct AZs.
-        PrereqError: If the VPC lookup does not yield its configured private subnets.
+        ValueError: If the region has fewer than two available AZs.
     """
 
     def __init__(
         self, scope: Construct, construct_id: str, config: DeploymentConfig
     ) -> None:
         super().__init__(scope, construct_id)
-        vpc_id = config.get("network", "vpc_id")
-        configured_subnet_ids = config.get("network", "private_subnet_ids")
-        self.vpc = ec2.Vpc.from_lookup(
+        az_setting = str(config.get("network", "availability_zones")).lower()
+        max_azs = 99 if az_setting == "max" else int(az_setting)
+        self.vpc = ec2.Vpc(
             self,
-            "ExistingVpc",
-            vpc_id=vpc_id,
+            "Vpc",
+            ip_addresses=ec2.IpAddresses.cidr(config.get("network", "vpc_cidr")),
+            max_azs=max_azs,
+            nat_gateways=1,
+            subnet_configuration=[
+                ec2.SubnetConfiguration(
+                    name="Public",
+                    subnet_type=ec2.SubnetType.PUBLIC,
+                    cidr_mask=24,
+                ),
+                ec2.SubnetConfiguration(
+                    name="Private",
+                    subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS,
+                    cidr_mask=21,
+                ),
+            ],
+            gateway_endpoints={
+                "S3": ec2.GatewayVpcEndpointOptions(
+                    service=ec2.GatewayVpcEndpointAwsService.S3,
+                )
+            },
+            vpc_name=f"{config.get('deployment', 'namespace')}-vpc",
         )
-
-        private_subnets = {
-            subnet.subnet_id: subnet for subnet in self.vpc.private_subnets
-        }
-        missing_subnets = sorted(set(configured_subnet_ids) - set(private_subnets))
-        if missing_subnets:
-            missing = ", ".join(missing_subnets)
-            raise PrereqError(
-                f"Configured private subnet(s) not found in VPC {vpc_id}: {missing}"
-            )
-
-        selected_subnets = [
-            private_subnets[subnet_id] for subnet_id in configured_subnet_ids
+        self.private_subnets = self.vpc.private_subnets
+        self.private_subnet_ids = [
+            subnet.subnet_id for subnet in self.private_subnets
         ]
-        self.private_subnets = selected_subnets
-        self.private_subnet_ids = configured_subnet_ids
-        availability_zones = [subnet.availability_zone for subnet in selected_subnets]
-        if len(set(availability_zones)) != len(availability_zones):
-            raise ConfigError(
-                "Invalid [network] private_subnet_ids: selected subnets must span distinct Availability Zones"
-            )
         self.security_group = ec2.SecurityGroup(
             self,
             "BatchSecurityGroup",

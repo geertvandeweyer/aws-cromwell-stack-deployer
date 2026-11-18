@@ -14,15 +14,23 @@ for omitted keys.
 Current deterministic validation covers:
 
 - `[deployment] namespace`: 1–32 lowercase letters, digits, or hyphens.
-- `[network] vpc_id` and `private_subnet_ids`: valid-looking AWS IDs and at
-	least two distinct subnet IDs. VPC existence, configured subnet membership,
-	and distinct Availability Zones are checked during stack synthesis using
-	VPC lookup context.
-- `[access] public_access`: requires hosted Cromwell, a non-empty restricted
-	CIDR allowlist, and a TLS certificate ARN. Unrestricted IPv4/IPv6 CIDRs are
-	rejected. Public mode requires at least two public VPC subnets and configures
-	an internet-facing ALB with HTTPS/443. The default private mode uses an
-	internal ALB with HTTP/80, reachable within the VPC.
+- `[network] vpc_cidr`: configurable IPv4 VPC CIDR, default `10.0.0.0/16`.
+	Use a non-overlapping range if connecting to VPN, peered VPCs, or on-premises
+	networks; accepted sizes are `/16` through `/18`.
+- `[network] availability_zones`: `2`, `3` (default), or `max`. `max` uses
+	all AZs available to the deploying account; at least two are required.
+- The stack creates public/private subnet pairs, one shared NAT gateway, and
+	an S3 gateway endpoint. One shared NAT lowers fixed costs relative to a NAT
+	per AZ but introduces cross-AZ egress dependency and possible data charges.
+- EFS settings are retained for configuration compatibility, but this stack
+	does not currently provision EFS or mount targets. NFS access, if implemented,
+	should use mount targets rather than an EFS VPC endpoint.
+- When hosted Cromwell is enabled, the selected access pattern is public HTTPS.
+	Set `allowed_cidrs` to a restricted client IP allowlist and
+	`cromwell.tls_certificate_arn` to an ACM certificate in the deployment
+	region. Unrestricted IPv4/IPv6 CIDRs are rejected. The public ALB uses
+	HTTPS/443 and requires at least two public subnets. Hosted Cromwell remains
+	opt-in, so certificate and allowlist values are needed only when enabling it.
 - `[cromwell] hosted`: requires a pinned, non-empty version (not `latest`).
 	The default artifact is the official
 	[Cromwell 92 release JAR](https://github.com/broadinstitute/cromwell/releases/download/92/cromwell-92.jar),
